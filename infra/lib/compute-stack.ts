@@ -10,11 +10,60 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import type * as kms from 'aws-cdk-lib/aws-kms';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import type * as events from 'aws-cdk-lib/aws-events';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type * as rds from 'aws-cdk-lib/aws-rds';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import type { ApexEnvConfig } from './config.js';
+
+/**
+ * Grants read on the Aurora credentials secret without letting CDK route the
+ * KMS portion of the grant through the key's resource policy.
+ *
+ * `secret.grantRead()` looks safe (the key's `trustAccountIdentities` default
+ * is true, which normally keeps grants identity-only), but when the secret's
+ * `encryptionKey` lives in a *third* stack (Security) -- neither the secret's
+ * own stack (Data) nor the grantee's stack (Compute) -- CDK's Secret.grantRead
+ * routes the KMS grant through the key's resource policy instead, which means
+ * Security's template needs to import the grantee role's ARN. Security
+ * already sits upstream of Compute (Compute depends on Data depends on
+ * Security), so that reverse edge is a hard synthesis-time cycle -- confirmed
+ * by literally hitting it running `cdk bootstrap` against this app.
+ * Granting both permissions directly onto the role's own identity policy
+ * sidesteps the key/secret resource policies entirely, so no stack needs
+ * anything back from Compute.
+ */
+function grantSecretReadWithoutCycle(secret: import('aws-cdk-lib/aws-secretsmanager').ISecret | undefined, secretsKeyArn: string, grantee: iam.IRole): void {
+  if (!secret) return;
+  grantee.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+      resources: [secret.secretArn],
+    }),
+  );
+  grantee.addToPrincipalPolicy(
+    new iam.PolicyStatement({ actions: ['kms:Decrypt'], resources: [secretsKeyArn] }),
+  );
+}
+
+/**
+ * ECS's `addContainer()`/`addSecret()` automatically calls `secret.grantRead(executionRole)`
+ * internally whenever a container has `secrets: {...}` -- there is no way to opt out of that
+ * from the outside. If the secret's `encryptionKey` is set, that automatic call reintroduces
+ * the exact same Security<->Compute cycle `grantSecretReadWithoutCycle` above works around,
+ * because it goes through the same internal KMS grant path.
+ *
+ * The fix: hand ECS a plain ARN-only reference to the *same* real secret, with no
+ * `encryptionKey` attached, so the automatic grant only adds `secretsmanager:GetSecretValue`
+ * / `DescribeSecret` (harmless, duplicates what we already granted) and skips its KMS branch
+ * entirely. The actual `kms:Decrypt` permission the container needs at runtime is already
+ * covered by the explicit `grantSecretReadWithoutCycle` call made once per role above.
+ */
+function asPlainSecretRef(scope: Construct, id: string, secret: secretsmanager.ISecret | undefined): secretsmanager.ISecret {
+  if (!secret) throw new Error('database.secret is undefined -- Aurora credentials were not auto-generated');
+  return secretsmanager.Secret.fromSecretCompleteArn(scope, id, secret.secretArn);
+}
 
 const AGENTS = ['aria', 'atlas', 'sentinel', 'archivist'] as const;
 type AgentName = (typeof AGENTS)[number];
@@ -30,6 +79,7 @@ export interface ComputeStackProps extends StackProps {
   eventBus: events.EventBus;
   dataKey: kms.Key;
   evidenceKey: kms.Key;
+  secretsKey: kms.Key;
   userPoolId: string;
   userPoolClientId: string;
   dashboardOrigin: string;
@@ -51,7 +101,7 @@ export class ComputeStack extends Stack {
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
-    const { config, vpc, database, evidenceBucket, memoryTable, queues, eventBus, dataKey, evidenceKey } = props;
+    const { config, vpc, database, evidenceBucket, memoryTable, queues, eventBus, dataKey, evidenceKey, secretsKey } = props;
 
     const cluster = new ecs.Cluster(this, 'Cluster', {
       clusterName: `apex-${config.envName}`,
@@ -80,18 +130,30 @@ export class ComputeStack extends Stack {
       description: 'APEX Stream application tasks',
       allowAllOutbound: true, // agents fetch arbitrary external sources
     });
-    props.databaseSecurityGroup.addIngressRule(
-      taskSecurityGroup,
-      ec2.Port.tcp(database.clusterEndpoint.port),
-      'application tasks to Aurora',
-    );
+    // `databaseSecurityGroup.addIngressRule(taskSecurityGroup, ...)` would add the new
+    // CfnSecurityGroupIngress resource to the SECURITY GROUP'S OWN stack (Data, since that's
+    // where `databaseSecurityGroup` was constructed), referencing Compute's taskSecurityGroup
+    // as the peer -- Data would then need Compute's group ID, contradicting the existing
+    // Compute -> Data dependency (Compute already needs the database endpoint) and creating
+    // a synthesis-time cycle. Confirmed by literally hitting it running `cdk bootstrap`.
+    // Building the ingress rule as its own resource here in Compute instead only needs a
+    // value Compute already legitimately has either way (Data's security group ID, via the
+    // dependency that already exists), so the reference only ever flows one way.
+    new ec2.CfnSecurityGroupIngress(this, 'DatabaseIngressFromTasks', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      sourceSecurityGroupId: taskSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: database.clusterEndpoint.port,
+      toPort: database.clusterEndpoint.port,
+      description: 'application tasks to Aurora',
+    });
 
     const executionRole = new iam.Role(this, 'ExecutionRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy')],
       description: 'Pulls images and writes container logs',
     });
-    database.secret?.grantRead(executionRole);
+    grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, executionRole);
     dataKey.grantDecrypt(executionRole);
 
     const sharedEnvironment = {
@@ -120,7 +182,7 @@ export class ComputeStack extends Stack {
     eventBus.grantPutEventsTo(orchestratorRole);
     evidenceBucket.grantRead(orchestratorRole); // read for review; never write
     evidenceKey.grantDecrypt(orchestratorRole);
-    database.secret?.grantRead(orchestratorRole);
+    grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, orchestratorRole);
     dataKey.grantEncryptDecrypt(orchestratorRole);
 
     const orchestratorTask = new ecs.FargateTaskDefinition(this, 'OrchestratorTask', {
@@ -151,7 +213,7 @@ export class ComputeStack extends Stack {
         BEAST_MAX_CONCURRENT_TASKS: '24',
       },
       secrets: {
-        DATABASE_URL: ecs.Secret.fromSecretsManager(database.secret!, 'uri'),
+        DATABASE_URL: ecs.Secret.fromSecretsManager(asPlainSecretRef(this, 'OrchestratorDbSecretRef', database.secret), 'uri'),
       },
       portMappings: [{ containerPort: 8080, protocol: ecs.Protocol.TCP }],
       healthCheck: {
@@ -238,7 +300,7 @@ export class ComputeStack extends Stack {
       // Only this agent's queue.
       queue.grantConsumeMessages(taskRole);
       eventBus.grantPutEventsTo(taskRole);
-      database.secret?.grantRead(taskRole);
+      grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, taskRole);
       dataKey.grantEncryptDecrypt(taskRole);
 
       /**
@@ -301,7 +363,7 @@ export class ComputeStack extends Stack {
           logRetention: config.logRetentionDays as logs.RetentionDays,
         }),
         environment: { ...sharedEnvironment, APEX_AGENT_ID: agent, QUEUE_URL: queue.queueUrl },
-        secrets: { DATABASE_URL: ecs.Secret.fromSecretsManager(database.secret!, 'uri') },
+        secrets: { DATABASE_URL: ecs.Secret.fromSecretsManager(asPlainSecretRef(this, `${cap(agent)}DbSecretRef`, database.secret), 'uri') },
         portMappings: [{ containerPort: 8080, protocol: ecs.Protocol.TCP }],
         // Long enough for the runtime's 25-second drain to finish in-flight work.
         stopTimeout: Duration.seconds(60),

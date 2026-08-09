@@ -66,6 +66,7 @@ const compute = new ComputeStack(app, `${prefix}-Compute`, {
   eventBus: messaging.eventBus,
   dataKey: security.dataKey,
   evidenceKey: security.evidenceKey,
+  secretsKey: security.secretsKey,
   userPoolId: auth.userPool.userPoolId,
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   dashboardOrigin,
