@@ -59,18 +59,6 @@ jobs:
         # every deploy is traceable to exactly one commit.
         run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-      - name: DEBUG - dump OIDC token claims (temporary, remove after root-causing the trust failure)
-        run: |
-          set -euo pipefail
-          resp=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")
-          token=$(echo "$resp" | jq -r .value)
-          payload=$(echo "$token" | cut -d. -f2)
-          # base64url -> base64 padding fix
-          mod=$(( ${#payload} % 4 ))
-          if [ $mod -eq 2 ]; then payload="${payload}=="; elif [ $mod -eq 3 ]; then payload="${payload}="; fi
-          echo "$payload" | tr '_-' '/+' | base64 -d | jq '{sub, aud, repository, ref, repository_owner, event_name}'
-
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}

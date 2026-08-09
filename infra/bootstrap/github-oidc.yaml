@@ -54,7 +54,15 @@ Resources:
                 # Scoped to one repository and one branch. Without this
                 # condition any GitHub repository on the internet could assume
                 # the role.
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/${AllowedBranch}'
+                # Wildcards around org/repo account for GitHub's immutable-ID sub
+                # claim format (repo:org@ownerId/repo@repoId:ref:...), which GitHub
+                # issues instead of the plain-name format for at least some repos
+                # (observed on this repo after a rename) -- confirmed by decoding a
+                # real token in CI: sub was
+                # 'repo:patriotnewsactivism@221751938/APEX-Stream@1328886448:ref:refs/heads/main',
+                # not the plain 'repo:patriotnewsactivism/APEX-Stream:...' the unmodified
+                # template below would produce, so plain StringEquals never matched.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}*/${GitHubRepo}*:ref:refs/heads/${AllowedBranch}'
       Policies:
         - PolicyName: apex-deploy
           PolicyDocument:
