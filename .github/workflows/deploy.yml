@@ -1,0 +1,272 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, staging, prod]
+        default: dev
+      skip_migrations:
+        description: Skip database migrations
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # required to mint the OIDC token
+  contents: read
+
+concurrency:
+  # Never two deploys to the same environment at once.
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  APEX_ENV: ${{ inputs.environment || 'dev' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build and push images
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build and test
+        run: |
+          npm run build -w @apex/core
+          npm run build -w @apex/agent-runtime
+          npm run build -w @apex/workflow-engine
+          node --test packages/core/test/*.test.mjs
+          node --test packages/workflow-engine/test/*.test.mjs
+
+      - id: meta
+        # Immutable tags: the ECR repositories reject overwriting a tag, so
+        # every deploy is traceable to exactly one commit.
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: apex-build-${{ github.run_id }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push each service
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist; do
+            repo="$REGISTRY/apex-$APEX_ENV/$service"
+            echo "::group::$service"
+            # The repository is created by CDK. On the very first deploy it does
+            # not exist yet, so create it here and let CDK adopt it after.
+            aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$service" >/dev/null 2>&1 \
+              || aws ecr create-repository --repository-name "apex-$APEX_ENV/$service" \
+                   --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
+            docker buildx build \
+              --file "services/$service/Dockerfile" \
+              --platform linux/arm64 \
+              --tag "$repo:$TAG" \
+              --tag "$repo:latest" \
+              --cache-from "type=gha,scope=$service" \
+              --cache-to "type=gha,mode=max,scope=$service" \
+              --push .
+            echo "::endgroup::"
+          done
+
+  # ---------------------------------------------------------------------------
+  infrastructure:
+    name: Deploy infrastructure
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+      dashboard_bucket: ${{ steps.outputs.outputs.dashboard_bucket }}
+      distribution_id: ${{ steps.outputs.outputs.distribution_id }}
+      dashboard_url: ${{ steps.outputs.outputs.dashboard_url }}
+      user_pool_id: ${{ steps.outputs.outputs.user_pool_id }}
+      client_id: ${{ steps.outputs.outputs.client_id }}
+      hosted_ui: ${{ steps.outputs.outputs.hosted_ui }}
+      cluster: ${{ steps.outputs.outputs.cluster }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: apex-infra-${{ github.run_id }}
+
+      - name: Bootstrap CDK if this account has never been bootstrapped
+        working-directory: infra
+        env:
+          APEX_ALERT_EMAIL: ${{ vars.APEX_ALERT_EMAIL }}
+        run: |
+          set -euo pipefail
+          npm run build
+          if ! aws cloudformation describe-stacks --stack-name CDKToolkit >/dev/null 2>&1; then
+            echo "CDK toolkit stack not found — bootstrapping"
+            npx cdk bootstrap "aws://$(aws sts get-caller-identity --query Account --output text)/${AWS_REGION}"
+          fi
+
+      - name: Deploy stacks
+        working-directory: infra
+        env:
+          APEX_ALERT_EMAIL: ${{ vars.APEX_ALERT_EMAIL }}
+        run: |
+          npx cdk deploy --all \
+            --context env=$APEX_ENV \
+            --context alertEmail="$APEX_ALERT_EMAIL" \
+            --require-approval never \
+            --outputs-file cdk-outputs.json \
+            --progress events
+
+      - id: outputs
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          get() { jq -r --arg s "Apex-$APEX_ENV-$1" --arg k "$2" '.[$s][$k] // ""' cdk-outputs.json; }
+          {
+            echo "api_url=$(get Compute ApiUrl)"
+            echo "dashboard_bucket=$(get Frontend DashboardBucketName)"
+            echo "distribution_id=$(get Frontend DistributionId)"
+            echo "dashboard_url=$(get Frontend DashboardUrl)"
+            echo "user_pool_id=$(get Auth UserPoolId)"
+            echo "client_id=$(get Auth UserPoolClientId)"
+            echo "hosted_ui=$(get Auth HostedUiUrl)"
+            echo "cluster=$(get Compute ClusterName)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs-${{ env.APEX_ENV }}
+          path: infra/cdk-outputs.json
+
+  # ---------------------------------------------------------------------------
+  migrate:
+    name: Run database migrations
+    needs: [build, infrastructure]
+    if: ${{ !inputs.skip_migrations }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: apex-migrate-${{ github.run_id }}
+
+      - name: Run migrations as a one-off ECS task
+        env:
+          CLUSTER: ${{ needs.infrastructure.outputs.cluster }}
+        run: |
+          set -euo pipefail
+          # Aurora sits in isolated subnets with no internet route, so the
+          # migration runs inside the VPC on the orchestrator image rather than
+          # from the runner. Same image, same credentials, different command.
+          task_def=$(aws ecs describe-services --cluster "$CLUSTER" --services orchestrator \
+            --query 'services[0].taskDefinition' --output text)
+          network=$(aws ecs describe-services --cluster "$CLUSTER" --services orchestrator \
+            --query 'services[0].networkConfiguration' --output json)
+
+          arn=$(aws ecs run-task \
+            --cluster "$CLUSTER" \
+            --task-definition "$task_def" \
+            --launch-type FARGATE \
+            --network-configuration "$network" \
+            --overrides '{"containerOverrides":[{"name":"orchestrator","command":["node","services/orchestrator/dist/migrate.js"]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+
+          echo "Migration task: $arn"
+          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$arn"
+
+          exit_code=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          reason=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$arn" \
+            --query 'tasks[0].stoppedReason' --output text)
+          echo "Exit code: $exit_code ($reason)"
+          [ "$exit_code" = "0" ] || { echo "::error::Migration failed"; exit 1; }
+
+  # ---------------------------------------------------------------------------
+  dashboard:
+    name: Build and publish dashboard
+    needs: [infrastructure, migrate]
+    if: ${{ always() && needs.infrastructure.result == 'success' && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+
+      - name: Build with the deployed environment baked in
+        working-directory: apps/dashboard
+        env:
+          # Same origin as the SPA: CloudFront routes /api to the load balancer,
+          # so the browser never makes a cross-origin request.
+          VITE_API_BASE: ''
+          VITE_COGNITO_DOMAIN: ${{ needs.infrastructure.outputs.hosted_ui }}
+          VITE_COGNITO_CLIENT_ID: ${{ needs.infrastructure.outputs.client_id }}
+        run: npm run build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: apex-dashboard-${{ github.run_id }}
+
+      - name: Publish to S3
+        env:
+          BUCKET: ${{ needs.infrastructure.outputs.dashboard_bucket }}
+          DISTRIBUTION: ${{ needs.infrastructure.outputs.distribution_id }}
+        run: |
+          set -euo pipefail
+          # Hashed assets are immutable and cached hard; index.html never is,
+          # otherwise a deploy would not reach browsers until the TTL expired.
+          aws s3 sync apps/dashboard/dist "s3://$BUCKET" \
+            --delete --exclude index.html \
+            --cache-control 'public, max-age=31536000, immutable'
+          aws s3 cp apps/dashboard/dist/index.html "s3://$BUCKET/index.html" \
+            --cache-control 'no-cache, must-revalidate'
+          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/index.html' '/'
+
+      - name: Summary
+        run: |
+          {
+            echo "### APEX Stream deployed"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Environment | \`${{ env.APEX_ENV }}\` |"
+            echo "| Dashboard | ${{ needs.infrastructure.outputs.dashboard_url }} |"
+            echo "| API | ${{ needs.infrastructure.outputs.api_url }} |"
+            echo "| User pool | \`${{ needs.infrastructure.outputs.user_pool_id }}\` |"
+            echo "| Image tag | \`${{ needs.build.outputs.image_tag }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  APEX Stream — GitHub Actions OIDC trust. Deploy this once from the AWS console.
+  It creates a role GitHub can assume with short-lived credentials, so no AWS
+  access key is ever stored in GitHub. This is the only step that requires the
+  console; everything after it happens from the browser via GitHub Actions.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: patriotnewsactivism
+    Description: GitHub organisation or username that owns the repository.
+  GitHubRepo:
+    Type: String
+    Default: APEX-Stream
+    Description: Repository name.
+  AllowedBranch:
+    Type: String
+    Default: main
+    Description: >
+      Only workflows running on this branch may assume the role. A pull request
+      from a fork therefore cannot deploy, which is the failure mode that
+      matters when the repository is public.
+
+Conditions:
+  # Reuse the provider if the account already has one; a duplicate is rejected.
+  CreateProvider: !Equals [!Ref 'AWS::NoValue', !Ref 'AWS::NoValue']
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      # GitHub's OIDC thumbprint. AWS no longer validates it for this provider,
+      # but the field is still required.
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+
+  DeploymentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: apex-github-deploy
+      Description: Assumed by GitHub Actions to deploy APEX Stream
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOidcProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                # Scoped to one repository and one branch. Without this
+                # condition any GitHub repository on the internet could assume
+                # the role.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/${AllowedBranch}'
+      Policies:
+        - PolicyName: apex-deploy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # CDK assumes its own bootstrap roles; this is what lets it.
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-*'
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:DescribeRepositories
+                  - ecr:DescribeImages
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                  - ecs:DescribeTasks
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                  - ecs:DescribeTaskDefinition
+                  - ecs:ListTasks
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/Apex-*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetObject
+                Resource:
+                  - !Sub 'arn:aws:s3:::apex-*-dashboard-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::apex-*-dashboard-${AWS::AccountId}/*'
+                  - !Sub 'arn:aws:s3:::cdk-*-assets-${AWS::AccountId}-*'
+                  - !Sub 'arn:aws:s3:::cdk-*-assets-${AWS::AccountId}-*/*'
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                  - cloudfront:GetInvalidation
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - logs:GetLogEvents
+                  - logs:DescribeLogStreams
+                Resource: '*'
+              # Explicitly out of reach for the deploy role: evidence objects.
+              # A compromised workflow must not be able to touch the archive.
+              - Effect: Deny
+                Action: s3:*
+                Resource:
+                  - !Sub 'arn:aws:s3:::apex-*-evidence-${AWS::AccountId}'
+                  - !Sub 'arn:aws:s3:::apex-*-evidence-${AWS::AccountId}/*'
+
+Outputs:
+  RoleArn:
+    Description: Add this to GitHub as the repository variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeploymentRole.Arn
+  NextStep:
+    Description: What to do next
+    Value: >
+      Copy RoleArn into GitHub → Settings → Secrets and variables → Actions →
+      Variables, named AWS_DEPLOY_ROLE_ARN. Then add AWS_REGION and
+      APEX_ALERT_EMAIL, and run the Deploy workflow.

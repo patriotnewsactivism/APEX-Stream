@@ -1,0 +1,65 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A PR check never needs write access to anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, test and synth
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build workspace packages
+        run: |
+          npm run build -w @apex/core
+          npm run build -w @apex/agent-runtime
+          npm run build -w @apex/workflow-engine
+
+      - name: Typecheck services
+        run: npx tsc -b services/orchestrator services/agent-aria services/agent-atlas services/agent-sentinel services/agent-archivist
+
+      - name: Unit tests
+        run: |
+          node --test packages/core/test/*.test.mjs
+          node --test packages/workflow-engine/test/*.test.mjs
+
+      - name: Typecheck dashboard
+        run: npm run build -w @apex/dashboard
+
+      - name: Synthesise infrastructure
+        working-directory: infra
+        env:
+          APEX_ALERT_EMAIL: ci@example.com
+          CDK_DEFAULT_ACCOUNT: '000000000000'
+          CDK_DEFAULT_REGION: us-east-1
+        run: |
+          npm run build
+          npx cdk synth --quiet
+
+      - name: Build container images
+        run: |
+          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist; do
+            echo "::group::$service"
+            docker build -f "services/$service/Dockerfile" -t "apex-$service:pr" .
+            echo "::endgroup::"
+          done

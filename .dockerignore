@@ -1,0 +1,9 @@
+node_modules
+**/node_modules
+**/dist
+**/cdk.out
+**/*.tsbuildinfo
+.git
+.github
+docs
+apps/dashboard/dist
