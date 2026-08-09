@@ -12,3 +12,12 @@ coverage/
 *.log
 .vite/
 apps/dashboard/dist/
+
+# CDK compiles infra/**/*.ts to sibling .js files (no separate outDir, since
+# cdk.json's app entry expects bin/apex.js in place). CI always rebuilds
+# fresh before cdk deploy/synth -- never commit these.
+infra/bin/*.js
+infra/lib/*.js
+infra/*.d.ts
+infra/bin/*.d.ts
+infra/lib/*.d.ts
