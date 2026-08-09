@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+cdk.out/
+cdk.context.json
+.env
+.env.*
+!.env.example
+coverage/
+.DS_Store
+*.log
+.vite/
+apps/dashboard/dist/
