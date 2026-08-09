@@ -297,6 +297,21 @@ export class ComputeStack extends Stack {
         description: `APEX ${agent} — scoped to its own queue and memory partition`,
       });
 
+      // Bedrock as a last-resort LLM fallback, IAM-only (no API key to manage or leak,
+      // since these tasks already run under an IAM role). No agent calls out to an LLM
+      // yet as of this commit -- this only makes the permission available ahead of that
+      // code landing. Scoped to Bedrock's foundation-model resource type in this account
+      // and region rather than a bare '*' on all actions.
+      taskRole.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+          resources: [
+            `arn:aws:bedrock:${Stack.of(this).region}::foundation-model/*`,
+            `arn:aws:bedrock:${Stack.of(this).region}:${Stack.of(this).account}:inference-profile/*`,
+          ],
+        }),
+      );
+
       // Only this agent's queue.
       queue.grantConsumeMessages(taskRole);
       eventBus.grantPutEventsTo(taskRole);
