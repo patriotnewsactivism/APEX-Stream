@@ -31,7 +31,7 @@ export class TaskQueue {
         MaxNumberOfMessages: Math.min(10, Math.max(1, max)),
         WaitTimeSeconds: waitSeconds,
         VisibilityTimeout: visibilityTimeout,
-        AttributeNames: ['ApproximateReceiveCount'],
+        MessageSystemAttributeNames: ['ApproximateReceiveCount'],
         MessageAttributeNames: ['All'],
       }),
     );

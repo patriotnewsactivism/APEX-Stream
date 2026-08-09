@@ -57,12 +57,13 @@ async function main(): Promise<void> {
     }
   });
 
-  app.setErrorHandler(async (error, request, reply) => {
-    const status = (error as { statusCode?: number }).statusCode ?? 500;
+  app.setErrorHandler(async (rawError, request, reply) => {
+    const error = rawError as Error & { statusCode?: number; code?: string };
+    const status = error.statusCode ?? 500;
     if (status >= 500) log.error('request failed', { error, path: request.url, method: request.method });
     else log.warn('request rejected', { message: error.message, path: request.url, status });
     await reply.code(status).send({
-      error: (error as { code?: string }).code ?? 'internal_error',
+      error: error.code ?? 'internal_error',
       message: status >= 500 ? 'Something went wrong on our side.' : error.message,
       requestId: request.id,
     });
