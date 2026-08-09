@@ -22,10 +22,6 @@ Parameters:
       from a fork therefore cannot deploy, which is the failure mode that
       matters when the repository is public.
 
-Conditions:
-  # Reuse the provider if the account already has one; a duplicate is rejected.
-  CreateProvider: !Equals [!Ref 'AWS::NoValue', !Ref 'AWS::NoValue']
-
 Resources:
   GitHubOidcProvider:
     Type: AWS::IAM::OIDCProvider
