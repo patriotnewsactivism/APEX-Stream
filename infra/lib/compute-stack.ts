@@ -11,7 +11,7 @@ import type * as kms from 'aws-cdk-lib/aws-kms';
 import type * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import type * as events from 'aws-cdk-lib/aws-events';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import type * as rds from 'aws-cdk-lib/aws-rds';
+import type { DatabaseRef } from './data-stack.js';
 import type * as s3 from 'aws-cdk-lib/aws-s3';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
@@ -71,7 +71,7 @@ type AgentName = (typeof AGENTS)[number];
 export interface ComputeStackProps extends StackProps {
   config: ApexEnvConfig;
   vpc: ec2.Vpc;
-  database: rds.DatabaseCluster;
+  database: DatabaseRef;
   databaseSecurityGroup: ec2.SecurityGroup;
   evidenceBucket: s3.Bucket;
   memoryTable: dynamodb.Table;
@@ -162,8 +162,8 @@ export class ComputeStack extends Stack {
       groupId: props.databaseSecurityGroup.securityGroupId,
       sourceSecurityGroupId: taskSecurityGroup.securityGroupId,
       ipProtocol: 'tcp',
-      fromPort: database.clusterEndpoint.port,
-      toPort: database.clusterEndpoint.port,
+      fromPort: database.endpoint.port,
+      toPort: database.endpoint.port,
       description: 'application tasks to Aurora',
     });
 

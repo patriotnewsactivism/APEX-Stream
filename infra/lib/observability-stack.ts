@@ -4,7 +4,7 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
-import type * as rds from 'aws-cdk-lib/aws-rds';
+import type { DatabaseRef } from './data-stack.js';
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
@@ -32,7 +32,7 @@ export class ObservabilityStack extends Stack {
       config: ApexEnvConfig;
       alertTopic: sns.Topic;
       loadBalancer: elbv2.ApplicationLoadBalancer;
-      database: rds.DatabaseCluster;
+      database: DatabaseRef;
       queues: Record<AgentName, sqs.Queue>;
       deadLetterQueues: Record<AgentName, sqs.Queue>;
       services: Record<string, ecs.FargateService>;
@@ -205,8 +205,13 @@ export class ObservabilityStack extends Stack {
 
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({
-        title: 'Aurora — capacity and connections',
-        left: [database.metricServerlessDatabaseCapacity({ label: 'ACUs', statistic: 'Average' })],
+        title: database.metricServerlessDatabaseCapacity ? 'Aurora — capacity and connections' : 'Database — connections',
+        // ACU capacity only exists for Aurora Serverless (config.auroraServerless) --
+        // on a plain RDS instance (Free Plan account workaround, see config.ts),
+        // there's no equivalent metric, so the chart just drops that series.
+        left: database.metricServerlessDatabaseCapacity
+          ? [database.metricServerlessDatabaseCapacity({ label: 'ACUs', statistic: 'Average' })]
+          : [],
         right: [database.metricDatabaseConnections({ label: 'connections', statistic: 'Maximum' })],
         width: 12,
       }),

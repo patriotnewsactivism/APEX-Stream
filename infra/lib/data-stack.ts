@@ -11,8 +11,24 @@ import type { ApexEnvConfig } from './config.js';
  * Managed data services: Aurora Serverless v2, the evidence bucket, and the
  * per-agent memory table.
  */
+/**
+ * Normalized handle to whichever database resource this stack actually
+ * built (Aurora cluster vs a plain instance) -- `DatabaseCluster` and
+ * `DatabaseInstance` don't share a common CDK interface for their endpoint
+ * (`clusterEndpoint` vs `instanceEndpoint`), so downstream stacks depend on
+ * this shape instead of the concrete construct type.
+ */
+export interface DatabaseRef {
+  readonly endpoint: rds.Endpoint;
+  readonly secret: import('aws-cdk-lib/aws-secretsmanager').ISecret | undefined;
+  readonly metricCPUUtilization: (props?: import('aws-cdk-lib/aws-cloudwatch').MetricOptions) => import('aws-cdk-lib/aws-cloudwatch').Metric;
+  readonly metricDatabaseConnections: (props?: import('aws-cdk-lib/aws-cloudwatch').MetricOptions) => import('aws-cdk-lib/aws-cloudwatch').Metric;
+  /** Aurora-Serverless-only. Undefined when running on a plain RDS instance (see auroraServerless in config.ts). */
+  readonly metricServerlessDatabaseCapacity?: (props?: import('aws-cdk-lib/aws-cloudwatch').MetricOptions) => import('aws-cdk-lib/aws-cloudwatch').Metric;
+}
+
 export class DataStack extends Stack {
-  readonly database: rds.DatabaseCluster;
+  readonly database: DatabaseRef;
   readonly evidenceBucket: s3.Bucket;
   readonly memoryTable: dynamodb.Table;
   readonly databaseSecurityGroup: ec2.SecurityGroup;
@@ -40,39 +56,88 @@ export class DataStack extends Stack {
       allowAllOutbound: false,
     });
 
-    this.database = new rds.DatabaseCluster(this, 'Database', {
-      engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_16_4 }),
-      vpc,
-      // Isolated subnets: the database has no route to the internet at all.
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
-      securityGroups: [this.databaseSecurityGroup],
-      // Serverless v2 bills per ACU-second, so an idle environment costs the
-      // floor rather than a provisioned instance running around the clock.
-      serverlessV2MinCapacity: config.auroraMinAcu,
-      serverlessV2MaxCapacity: config.auroraMaxAcu,
-      writer: rds.ClusterInstance.serverlessV2('Writer', { enablePerformanceInsights: true }),
-      readers: config.auroraMultiAz
-        ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: true, enablePerformanceInsights: true })]
-        : [],
-      defaultDatabaseName: 'apex',
-      credentials: rds.Credentials.fromGeneratedSecret('apex_admin', {
-        secretName: `apex/${config.envName}/database`,
-        encryptionKey: secretsKey,
-      }),
-      storageEncrypted: true,
-      storageEncryptionKey: dataKey,
-      backup: { retention: Duration.days(config.auroraBackupRetentionDays), preferredWindow: '03:00-04:00' },
-      cloudwatchLogsExports: ['postgresql'],
-      monitoringInterval: Duration.seconds(60),
-      deletionProtection: config.removalProtection,
-      removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
-      parameters: {
-        // Log anything slower than a second — enough to catch pathological
-        // queries without logging every request at volume.
-        log_min_duration_statement: '1000',
-        'rds.force_ssl': '1',
-      },
+    const sharedCredentials = rds.Credentials.fromGeneratedSecret('apex_admin', {
+      secretName: `apex/${config.envName}/database`,
+      encryptionKey: secretsKey,
     });
+    const sharedParameters = {
+      // Log anything slower than a second — enough to catch pathological
+      // queries without logging every request at volume.
+      log_min_duration_statement: '1000',
+      'rds.force_ssl': '1',
+    };
+
+    if (config.auroraServerless) {
+      const cluster = new rds.DatabaseCluster(this, 'Database', {
+        engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_16_4 }),
+        vpc,
+        // Isolated subnets: the database has no route to the internet at all.
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [this.databaseSecurityGroup],
+        // Serverless v2 bills per ACU-second, so an idle environment costs the
+        // floor rather than a provisioned instance running around the clock.
+        serverlessV2MinCapacity: config.auroraMinAcu,
+        serverlessV2MaxCapacity: config.auroraMaxAcu,
+        writer: rds.ClusterInstance.serverlessV2('Writer', { enablePerformanceInsights: true }),
+        readers: config.auroraMultiAz
+          ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: true, enablePerformanceInsights: true })]
+          : [],
+        defaultDatabaseName: 'apex',
+        credentials: sharedCredentials,
+        storageEncrypted: true,
+        storageEncryptionKey: dataKey,
+        backup: { retention: Duration.days(config.auroraBackupRetentionDays), preferredWindow: '03:00-04:00' },
+        cloudwatchLogsExports: ['postgresql'],
+        monitoringInterval: Duration.seconds(60),
+        deletionProtection: config.removalProtection,
+        removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
+        parameters: sharedParameters,
+      });
+      this.database = {
+        endpoint: cluster.clusterEndpoint,
+        secret: cluster.secret,
+        metricCPUUtilization: (p) => cluster.metricCPUUtilization(p),
+        metricDatabaseConnections: (p) => cluster.metricDatabaseConnections(p),
+        metricServerlessDatabaseCapacity: (p) => cluster.metricServerlessDatabaseCapacity(p),
+      };
+    } else {
+      // This AWS account's Free Plan rejects standard Aurora cluster creation
+      // outright (see config.ts's auroraServerless doc comment for the exact
+      // error + why CDK can't use the account's only permitted Aurora path).
+      // A single small standard RDS instance sidesteps that restriction
+      // entirely and, at this size, is genuinely covered by the AWS Free
+      // Tier (750 instance-hours/mo of db.t4g.micro + 20GB gp2 storage) --
+      // $0/mo rather than just "cheap."
+      const instance = new rds.DatabaseInstance(this, 'Database', {
+        engine: rds.DatabaseInstanceEngine.postgres({ version: rds.PostgresEngineVersion.VER_16_4 }),
+        instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MICRO),
+        vpc,
+        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        securityGroups: [this.databaseSecurityGroup],
+        publiclyAccessible: false,
+        multiAz: config.auroraMultiAz,
+        allocatedStorage: 20,
+        storageType: rds.StorageType.GP2,
+        databaseName: 'apex',
+        credentials: sharedCredentials,
+        storageEncrypted: true,
+        storageEncryptionKey: dataKey,
+        backupRetention: Duration.days(config.auroraBackupRetentionDays),
+        preferredBackupWindow: '03:00-04:00',
+        cloudwatchLogsExports: ['postgresql'],
+        monitoringInterval: Duration.seconds(60),
+        deletionProtection: config.removalProtection,
+        removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
+        parameters: sharedParameters,
+      });
+      this.database = {
+        endpoint: instance.instanceEndpoint,
+        secret: instance.secret,
+        metricCPUUtilization: (p) => instance.metricCPUUtilization(p),
+        metricDatabaseConnections: (p) => instance.metricDatabaseConnections(p),
+        // No metricServerlessDatabaseCapacity -- this is a plain instance, not Aurora Serverless.
+      };
+    }
 
     // ---------------------------------------------------------------------
     // Evidence bucket — write-once
@@ -144,7 +209,7 @@ export class DataStack extends Stack {
       removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
     });
 
-    new CfnOutput(this, 'DatabaseEndpoint', { value: this.database.clusterEndpoint.hostname });
+    new CfnOutput(this, 'DatabaseEndpoint', { value: this.database.endpoint.hostname });
     new CfnOutput(this, 'DatabaseSecretArn', { value: this.database.secret?.secretArn ?? 'none' });
     new CfnOutput(this, 'EvidenceBucketName', { value: this.evidenceBucket.bucketName });
     new CfnOutput(this, 'MemoryTableName', { value: this.memoryTable.tableName });

@@ -16,6 +16,20 @@ export interface ApexEnvConfig {
   auroraMaxAcu: number;
   auroraMultiAz: boolean;
   auroraBackupRetentionDays: number;
+  /**
+   * This AWS account is on the new (2026) "Free Plan" tier, which rejects
+   * standard Aurora cluster creation entirely -- it only allows Aurora via
+   * the new "Express Configuration" quick-create flow, which CDK doesn't
+   * support yet (see aws/aws-cdk#37537). Confirmed live via a real
+   * CREATE_FAILED: "To use Aurora clusters with free plan accounts you need
+   * to set WithExpressConfiguration." Don's call: stay free, don't upgrade
+   * the account. So dev/staging use a single small standard RDS instance
+   * (db.t4g.micro, 20GB gp2 -- genuinely AWS-Free-Tier-eligible, $0/mo)
+   * instead of Aurora Serverless v2. Prod keeps Aurora Serverless v2 as
+   * designed; flip this back to true for dev once the account is upgraded
+   * or CDK adds Express Configuration support.
+   */
+  auroraServerless: boolean;
   /** Fargate Spot is ~70% cheaper and fine for interruptible collectors. */
   useFargateSpot: boolean;
   orchestrator: { cpu: number; memoryMiB: number; minCount: number; maxCount: number };
@@ -59,6 +73,7 @@ export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {
       auroraMaxAcu: 16,
       auroraMultiAz: true,
       auroraBackupRetentionDays: 30,
+      auroraServerless: true,
       useFargateSpot: false,
       orchestrator: { cpu: 1024, memoryMiB: 2048, minCount: 2, maxCount: 10 },
       agents: AGENT_SIZES_PROD,
@@ -79,6 +94,7 @@ export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {
     // real CREATE_FAILED: "specified backup retention period exceeds the
     // maximum available to free tier customers"). 1 day is the max allowed.
     auroraBackupRetentionDays: 1,
+    auroraServerless: false,
     useFargateSpot: true,
     orchestrator: { cpu: 512, memoryMiB: 1024, minCount: 1, maxCount: 4 },
     agents: AGENT_SIZES_DEV,
