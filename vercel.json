@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "echo 'APEX-Stream deploys exclusively via AWS CDK (see infra/) — skipping this auto-linked Vercel build.' && exit 0"
+}
