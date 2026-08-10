@@ -1,5 +1,18 @@
 import pg from 'pg';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AnomalyScoreResult, SignalObservation } from '@apex/core';
+
+// See services/orchestrator/src/db.ts's loadRdsCaBundle for the full
+// explanation -- same fix, same underlying bug, this package's own pg.Pool.
+function loadRdsCaBundle(): string | undefined {
+  try {
+    return readFileSync(join(process.cwd(), 'packages/core/certs/rds-global-bundle.pem'), 'utf8');
+  } catch (err) {
+    console.error('rds ca bundle missing, falling back to rejectUnauthorized:false', err);
+    return undefined;
+  }
+}
 
 /**
  * Postgres access for collector agents.
@@ -17,7 +30,13 @@ export class Store {
       connectionString,
       max: 5,
       statement_timeout: 20_000,
-      ssl: process.env.DATABASE_CA_REQUIRED === 'false' ? undefined : { rejectUnauthorized: true },
+      ssl:
+        process.env.DATABASE_CA_REQUIRED === 'false'
+          ? undefined
+          : (() => {
+              const ca = loadRdsCaBundle();
+              return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
+            })(),
       application_name: `apex-${process.env.APEX_AGENT_ID ?? 'agent'}`,
     });
   }
