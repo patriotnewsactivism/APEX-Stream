@@ -1,11 +1,49 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, SecretValue, Stack, type StackProps } from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as kms from 'aws-cdk-lib/aws-kms';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import type { Construct } from 'constructs';
 import type { ApexEnvConfig } from './config.js';
+
+/**
+ * The RDS/Aurora auto-generated credentials secret only ever contains
+ * {username, password, engine, host, port, dbname, db(Cluster|Instance)Identifier}
+ * -- there is no `uri` field. ComputeStack's ECS task defs need a single
+ * connection-string secret (`ecs.Secret.fromSecretsManager(secret, 'uri')`),
+ * so this builds a second, derived secret whose JSON is just `{"uri": "..."}`.
+ * The password is pulled in via CloudFormation's own
+ * `{{resolve:secretsmanager:...}}` dynamic-reference syntax (via
+ * `secretValueFromJson(...).unsafeUnwrap()`) so the real plaintext password
+ * is never visible in the CDK app, in `cdk synth` output, or in this
+ * process at all -- only CloudFormation resolves it, once, at deploy time,
+ * when this derived secret is actually created. Trade-off: this derived
+ * secret goes stale if the underlying credentials ever rotate -- acceptable
+ * here since nothing in this stack attaches a rotation schedule.
+ * Confirmed URI-safe: this account's generated username/password contain no
+ * `@ / : # ? % " \` characters (checked directly against the live secret).
+ */
+function buildDatabaseUriSecret(
+  scope: Construct,
+  id: string,
+  config: ApexEnvConfig,
+  rawSecret: secretsmanager.ISecret,
+  hostAddress: string,
+  port: number,
+  dbName: string,
+  encryptionKey: kms.Key,
+): secretsmanager.Secret {
+  const username = rawSecret.secretValueFromJson('username').unsafeUnwrap();
+  const password = rawSecret.secretValueFromJson('password').unsafeUnwrap();
+  const uri = `postgresql://${username}:${password}@${hostAddress}:${port}/${dbName}`;
+  return new secretsmanager.Secret(scope, id, {
+    secretName: `apex/${config.envName}/database-uri`,
+    encryptionKey,
+    secretStringValue: SecretValue.unsafePlainText(JSON.stringify({ uri })),
+  });
+}
 
 /**
  * Managed data services: Aurora Serverless v2, the evidence bucket, and the
@@ -93,9 +131,20 @@ export class DataStack extends Stack {
         removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
         parameters: sharedParameters,
       });
+      if (!cluster.secret) throw new Error('Aurora credentials were not auto-generated');
+      const uriSecret = buildDatabaseUriSecret(
+        this,
+        'DatabaseUriSecret',
+        config,
+        cluster.secret,
+        cluster.clusterEndpoint.hostname,
+        cluster.clusterEndpoint.port,
+        'apex',
+        secretsKey,
+      );
       this.database = {
         endpoint: cluster.clusterEndpoint,
-        secret: cluster.secret,
+        secret: uriSecret,
         metricCPUUtilization: (p) => cluster.metricCPUUtilization(p),
         metricDatabaseConnections: (p) => cluster.metricDatabaseConnections(p),
         metricServerlessDatabaseCapacity: (p) => cluster.metricServerlessDatabaseCapacity(p),
@@ -130,9 +179,20 @@ export class DataStack extends Stack {
         removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
         parameters: sharedParameters,
       });
+      if (!instance.secret) throw new Error('RDS credentials were not auto-generated');
+      const uriSecret = buildDatabaseUriSecret(
+        this,
+        'DatabaseUriSecret',
+        config,
+        instance.secret,
+        instance.instanceEndpoint.hostname,
+        instance.instanceEndpoint.port,
+        'apex',
+        secretsKey,
+      );
       this.database = {
         endpoint: instance.instanceEndpoint,
-        secret: instance.secret,
+        secret: uriSecret,
         metricCPUUtilization: (p) => instance.metricCPUUtilization(p),
         metricDatabaseConnections: (p) => instance.metricDatabaseConnections(p),
         // No metricServerlessDatabaseCapacity -- this is a plain instance, not Aurora Serverless.
