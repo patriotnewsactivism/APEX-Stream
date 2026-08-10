@@ -96,7 +96,7 @@ export interface ComputeStackProps extends StackProps {
  */
 export class ComputeStack extends Stack {
   readonly loadBalancer: elbv2.ApplicationLoadBalancer;
-  readonly repositories: Record<string, ecr.Repository> = {};
+  readonly repositories: Record<string, ecr.IRepository> = {};
   readonly services: Record<string, ecs.FargateService> = {};
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
@@ -112,36 +112,26 @@ export class ComputeStack extends Stack {
 
     const serviceNames = ['orchestrator', ...AGENTS];
     for (const name of serviceNames) {
-      // NOTE: imageTagMutability/imageTagMutabilityExclusionFilters are deliberately
-      // NOT set via the L2 props here. Passing both together makes this CDK
-      // version's L2 Repository constructor throw
-      // "ImageTagMutabilityRequiresExclusionFilters" unless imageTagMutability is
-      // already 'IMMUTABLE_WITH_EXCLUSION' -- but that enum value isn't exposed on
-      // ecr.TagMutability at all in this version, so it's unreachable from props.
-      // Set plain IMMUTABLE here (valid on its own), then override both properties
-      // directly on the underlying L1 resource below, which has no such restriction.
-      const repo = new ecr.Repository(this, `${cap(name)}Repo`, {
-        repositoryName: `apex-${config.envName}/${name}`,
-        imageScanOnPush: true,
-        imageTagMutability: ecr.TagMutability.IMMUTABLE,
-        encryption: ecr.RepositoryEncryption.KMS,
-        encryptionKey: dataKey,
-        lifecycleRules: [
-          { description: 'Keep the last 15 images', maxImageCount: 15 },
-          { description: 'Expire untagged after 7 days', tagStatus: ecr.TagStatus.UNTAGGED, maxImageAge: Duration.days(7) },
-        ],
-      });
-      // The ECS task definitions below deploy off the floating `latest` tag, so
-      // it must stay overwritable even though every other (per-commit) tag is
-      // immutable and traceable to exactly one build. Set on the L1 resource
-      // directly so it matches exactly what the live repositories were already
-      // put into via `aws ecr put-image-tag-mutability`.
-      const cfnRepo = repo.node.defaultChild as ecr.CfnRepository;
-      cfnRepo.imageTagMutability = 'IMMUTABLE_WITH_EXCLUSION';
-      cfnRepo.imageTagMutabilityExclusionFilters = [
-        { imageTagMutabilityExclusionFilterType: 'WILDCARD', imageTagMutabilityExclusionFilterValue: 'latest' },
-      ];
-      this.repositories[name] = repo;
+      // These repos are IMPORTED, not created, on purpose. The CI pipeline's
+      // "Build and push image" jobs push into `apex-${envName}/${name}` BEFORE
+      // this stack ever deploys (they have to exist for `docker push` to have
+      // somewhere to land), and ecr.Repository's default removalPolicy is
+      // RETAIN -- so any earlier Compute stack attempt (this one included,
+      // across retries) leaves these repos behind even after a full stack
+      // delete/rollback. A `new ecr.Repository(...)` here collides with that
+      // survivor on every single retry ("already exists"). Importing instead
+      // means this stack never tries to own their lifecycle, so retries are
+      // actually idempotent. Encryption/lifecycle rules/tag-mutability
+      // (IMMUTABLE_WITH_EXCLUSION on the `latest` tag, so the floating
+      // deploy tag stays overwritable while every per-commit tag is
+      // immutable) are already live on these repos via direct
+      // `aws ecr put-image-tag-mutability` / console config -- see git log
+      // for the one-time setup commands.
+      this.repositories[name] = ecr.Repository.fromRepositoryName(
+        this,
+        `${cap(name)}Repo`,
+        `apex-${config.envName}/${name}`,
+      );
     }
 
     const taskSecurityGroup = new ec2.SecurityGroup(this, 'TaskSg', {
