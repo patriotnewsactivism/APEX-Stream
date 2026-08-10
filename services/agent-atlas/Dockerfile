@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build context is the repository root so workspace packages resolve.
-FROM public.ecr.aws/docker/library/node:22-alpine AS build
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:22-alpine AS build
 WORKDIR /repo
 
 # Manifests first: dependency layers stay cached while source churns.
