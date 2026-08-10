@@ -95,7 +95,8 @@ jobs:
           # not exist yet, so create it here and let CDK adopt it after.
           aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$SERVICE" >/dev/null 2>&1 \
             || aws ecr create-repository --repository-name "apex-$APEX_ENV/$SERVICE" \
-                 --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
+                 --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE \
+                 --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest >/dev/null
           docker buildx build \
             --file "services/$SERVICE/Dockerfile" \
             --platform linux/arm64 \
