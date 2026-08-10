@@ -127,10 +127,23 @@ export class ComputeStack extends Stack {
       // immutable) are already live on these repos via direct
       // `aws ecr put-image-tag-mutability` / console config -- see git log
       // for the one-time setup commands.
+      // The CI matrix's actual job/service names are `orchestrator` plus
+      // `agent-aria` / `agent-atlas` / `agent-sentinel` / `agent-archivist`
+      // (see .github/workflows/deploy.yml's `matrix.service` list) -- so
+      // that's also the real repo name each image gets pushed to
+      // (`apex-${envName}/agent-${name}` for agents, no prefix for
+      // orchestrator). This map's own keys stay unprefixed (`aria`, not
+      // `agent-aria`) since everything else in this file/messaging-stack.ts/
+      // observability-stack.ts already keys off the bare AGENTS names --
+      // only the ECR lookup itself needs the prefix. Confirmed directly
+      // against the live account: `apex-dev/atlas` (no prefix) has never
+      // existed at all; `apex-dev/agent-atlas` has real pushed images going
+      // back multiple commits.
+      const ecrRepoName = name === 'orchestrator' ? name : `agent-${name}`;
       this.repositories[name] = ecr.Repository.fromRepositoryName(
         this,
         `${cap(name)}Repo`,
-        `apex-${config.envName}/${name}`,
+        `apex-${config.envName}/${ecrRepoName}`,
       );
     }
 
