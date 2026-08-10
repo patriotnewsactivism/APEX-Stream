@@ -28,7 +28,7 @@ export class SecurityStack extends Stack {
 
     this.dataKey = new kms.Key(this, 'DataKey', {
       alias: `apex-${config.envName}-data`,
-      description: 'APEX Stream — database, queues and memory encryption',
+      description: 'APEX Stream - database, queues and memory encryption',
       enableKeyRotation: true,
       rotationPeriod: Duration.days(365),
       removalPolicy,
@@ -37,7 +37,7 @@ export class SecurityStack extends Stack {
 
     this.evidenceKey = new kms.Key(this, 'EvidenceKey', {
       alias: `apex-${config.envName}-evidence`,
-      description: 'APEX Stream — evidence archive (write-once artefacts)',
+      description: 'APEX Stream - evidence archive (write-once artefacts)',
       enableKeyRotation: true,
       rotationPeriod: Duration.days(365),
       removalPolicy: RemovalPolicy.RETAIN, // never destroy with the stack
@@ -46,7 +46,7 @@ export class SecurityStack extends Stack {
 
     this.secretsKey = new kms.Key(this, 'SecretsKey', {
       alias: `apex-${config.envName}-secrets`,
-      description: 'APEX Stream — database credentials and API tokens',
+      description: 'APEX Stream - database credentials and API tokens',
       enableKeyRotation: true,
       rotationPeriod: Duration.days(365),
       removalPolicy,

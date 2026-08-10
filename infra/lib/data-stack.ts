@@ -36,7 +36,7 @@ export class DataStack extends Stack {
     // ---------------------------------------------------------------------
     this.databaseSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSg', {
       vpc,
-      description: 'APEX Stream database — ingress only from application tasks',
+      description: 'APEX Stream database - ingress only from application tasks',
       allowAllOutbound: false,
     });
 

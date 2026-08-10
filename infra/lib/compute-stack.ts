@@ -173,7 +173,7 @@ export class ComputeStack extends Stack {
     // -----------------------------------------------------------------------
     const orchestratorRole = new iam.Role(this, 'OrchestratorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-      description: 'APEX orchestrator — dispatches work, reads state, never captures evidence',
+      description: 'APEX orchestrator - dispatches work, reads state, never captures evidence',
     });
     for (const queue of Object.values(queues)) queue.grantSendMessages(orchestratorRole);
     for (const queue of Object.values(queues)) {
@@ -294,7 +294,7 @@ export class ComputeStack extends Stack {
 
       const taskRole = new iam.Role(this, `${cap(agent)}TaskRole`, {
         assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
-        description: `APEX ${agent} — scoped to its own queue and memory partition`,
+        description: `APEX ${agent} - scoped to its own queue and memory partition`,
       });
 
       // Bedrock as a last-resort LLM fallback, IAM-only (no API key to manage or leak,
