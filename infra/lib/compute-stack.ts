@@ -112,7 +112,15 @@ export class ComputeStack extends Stack {
 
     const serviceNames = ['orchestrator', ...AGENTS];
     for (const name of serviceNames) {
-      this.repositories[name] = new ecr.Repository(this, `${cap(name)}Repo`, {
+      // NOTE: imageTagMutability/imageTagMutabilityExclusionFilters are deliberately
+      // NOT set via the L2 props here. Passing both together makes this CDK
+      // version's L2 Repository constructor throw
+      // "ImageTagMutabilityRequiresExclusionFilters" unless imageTagMutability is
+      // already 'IMMUTABLE_WITH_EXCLUSION' -- but that enum value isn't exposed on
+      // ecr.TagMutability at all in this version, so it's unreachable from props.
+      // Set plain IMMUTABLE here (valid on its own), then override both properties
+      // directly on the underlying L1 resource below, which has no such restriction.
+      const repo = new ecr.Repository(this, `${cap(name)}Repo`, {
         repositoryName: `apex-${config.envName}/${name}`,
         imageScanOnPush: true,
         imageTagMutability: ecr.TagMutability.IMMUTABLE,
@@ -123,6 +131,17 @@ export class ComputeStack extends Stack {
           { description: 'Expire untagged after 7 days', tagStatus: ecr.TagStatus.UNTAGGED, maxImageAge: Duration.days(7) },
         ],
       });
+      // The ECS task definitions below deploy off the floating `latest` tag, so
+      // it must stay overwritable even though every other (per-commit) tag is
+      // immutable and traceable to exactly one build. Set on the L1 resource
+      // directly so it matches exactly what the live repositories were already
+      // put into via `aws ecr put-image-tag-mutability`.
+      const cfnRepo = repo.node.defaultChild as ecr.CfnRepository;
+      cfnRepo.imageTagMutability = 'IMMUTABLE_WITH_EXCLUSION';
+      cfnRepo.imageTagMutabilityExclusionFilters = [
+        { imageTagMutabilityExclusionFilterType: 'WILDCARD', imageTagMutabilityExclusionFilterValue: 'latest' },
+      ];
+      this.repositories[name] = repo;
     }
 
     const taskSecurityGroup = new ec2.SecurityGroup(this, 'TaskSg', {
