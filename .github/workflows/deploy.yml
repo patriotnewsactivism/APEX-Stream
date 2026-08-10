@@ -30,10 +30,10 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  build:
-    name: Build and push images
+  test:
+    name: Build and test packages
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 15
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
@@ -59,46 +59,56 @@ jobs:
         # every deploy is traceable to exactly one commit.
         run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build and push image (${{ matrix.service }})
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [orchestrator, agent-aria, agent-atlas, agent-sentinel, agent-archivist]
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-build-${{ github.run_id }}
+          role-session-name: apex-build-${{ matrix.service }}-${{ github.run_id }}
 
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build and push each service
+      - name: Build and push
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          TAG: ${{ needs.test.outputs.image_tag }}
+          SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist; do
-            repo="$REGISTRY/apex-$APEX_ENV/$service"
-            echo "::group::$service"
-            # The repository is created by CDK. On the very first deploy it does
-            # not exist yet, so create it here and let CDK adopt it after.
-            aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$service" >/dev/null 2>&1 \
-              || aws ecr create-repository --repository-name "apex-$APEX_ENV/$service" \
-                   --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
-            docker buildx build \
-              --file "services/$service/Dockerfile" \
-              --platform linux/arm64 \
-              --tag "$repo:$TAG" \
-              --tag "$repo:latest" \
-              --cache-from "type=gha,scope=$service" \
-              --cache-to "type=gha,mode=max,scope=$service" \
-              --push .
-            echo "::endgroup::"
-          done
+          repo="$REGISTRY/apex-$APEX_ENV/$SERVICE"
+          # The repository is created by CDK. On the very first deploy it does
+          # not exist yet, so create it here and let CDK adopt it after.
+          aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$SERVICE" >/dev/null 2>&1 \
+            || aws ecr create-repository --repository-name "apex-$APEX_ENV/$SERVICE" \
+                 --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
+          docker buildx build \
+            --file "services/$SERVICE/Dockerfile" \
+            --platform linux/arm64 \
+            --tag "$repo:$TAG" \
+            --tag "$repo:latest" \
+            --cache-from "type=gha,scope=$SERVICE" \
+            --cache-to "type=gha,mode=max,scope=$SERVICE" \
+            --push .
 
   # ---------------------------------------------------------------------------
   infrastructure:
     name: Deploy infrastructure
-    needs: build
+    needs: [test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -170,7 +180,7 @@ jobs:
   # ---------------------------------------------------------------------------
   migrate:
     name: Run database migrations
-    needs: [build, infrastructure]
+    needs: [test, build, infrastructure]
     if: ${{ !inputs.skip_migrations }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -268,5 +278,5 @@ jobs:
             echo "| Dashboard | ${{ needs.infrastructure.outputs.dashboard_url }} |"
             echo "| API | ${{ needs.infrastructure.outputs.api_url }} |"
             echo "| User pool | \`${{ needs.infrastructure.outputs.user_pool_id }}\` |"
-            echo "| Image tag | \`${{ needs.build.outputs.image_tag }}\` |"
+            echo "| Image tag | \`${{ needs.test.outputs.image_tag }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
