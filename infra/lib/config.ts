@@ -74,7 +74,11 @@ export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {
     auroraMinAcu: 0.5,
     auroraMaxAcu: 4,
     auroraMultiAz: false,
-    auroraBackupRetentionDays: 7,
+    // This AWS account is Free-Tier-constrained: RDS rejects any automated
+    // backup retention period above the free-tier max (confirmed live via a
+    // real CREATE_FAILED: "specified backup retention period exceeds the
+    // maximum available to free tier customers"). 1 day is the max allowed.
+    auroraBackupRetentionDays: 1,
     useFargateSpot: true,
     orchestrator: { cpu: 512, memoryMiB: 1024, minCount: 1, maxCount: 4 },
     agents: AGENT_SIZES_DEV,
