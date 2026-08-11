@@ -1,7 +1,9 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import type * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import type { Construct } from 'constructs';
 import type { ApexEnvConfig } from './config.js';
@@ -21,10 +23,16 @@ export class FrontendStack extends Stack {
   constructor(
     scope: Construct,
     id: string,
-    props: StackProps & { config: ApexEnvConfig; loadBalancer: elbv2.ApplicationLoadBalancer },
+    props: StackProps & {
+      config: ApexEnvConfig;
+      loadBalancer: elbv2.ApplicationLoadBalancer;
+      userPoolId: string;
+      userPoolClientId: string;
+      hostedUiDomain: string;
+    },
   ) {
     super(scope, id, props);
-    const { config, loadBalancer } = props;
+    const { config, loadBalancer, userPoolId, userPoolClientId, hostedUiDomain } = props;
 
     this.bucket = new s3.Bucket(this, 'DashboardBucket', {
       bucketName: `apex-${config.envName}-dashboard-${this.account}`,
@@ -47,7 +55,12 @@ export class FrontendStack extends Stack {
             "style-src 'self' 'unsafe-inline'", // inline styles only, no inline scripts
             "img-src 'self' data:",
             "font-src 'self'",
-            `connect-src 'self' https://cognito-idp.${this.region}.amazonaws.com`,
+            // The dashboard talks to two different Cognito surfaces: the
+            // control-plane API (cognito-idp, used by nothing client-side today
+            // but kept for future direct SDK calls) and the Hosted UI's own
+            // domain, which auth.ts calls directly for the /oauth2/token
+            // exchange -- that fetch() is blocked by CSP without this entry.
+            `connect-src 'self' https://cognito-idp.${this.region}.amazonaws.com ${hostedUiDomain}`,
             "frame-ancestors 'none'",
             "base-uri 'self'",
             "form-action 'self'",
@@ -97,7 +110,56 @@ export class FrontendStack extends Stack {
       enableLogging: config.envName === 'prod',
     });
 
-    new CfnOutput(this, 'DashboardUrl', { value: `https://${this.distribution.distributionDomainName}` });
+    const dashboardUrl = `https://${this.distribution.distributionDomainName}`;
+
+    // The Cognito app client's callback/logout URLs must allow this exact
+    // origin, but that origin (CloudFront's generated domain name) is only
+    // known after the distribution exists -- and the distribution depends on
+    // Compute's load balancer, which depends on Auth's user pool. That is a
+    // genuine cycle if done via a native CDK cross-stack reference, so it is
+    // broken here instead with a custom resource that runs post-creation and
+    // imperatively patches the already-created app client. UpdateUserPoolClient
+    // replaces the whole property set it's given, so every other field the
+    // client was created with is passed through unchanged -- only the
+    // Callback/LogoutURLs actually gain the real dashboard origin.
+    const oauthClientPatch = {
+      service: 'CognitoIdentityServiceProvider',
+      action: 'updateUserPoolClient',
+      parameters: {
+        UserPoolId: userPoolId,
+        ClientId: userPoolClientId,
+        ClientName: `apex-${config.envName}-dashboard`,
+        CallbackURLs: ['http://localhost:5173/callback', 'https://localhost:5173/callback', `${dashboardUrl}/callback`],
+        LogoutURLs: ['http://localhost:5173', dashboardUrl],
+        AllowedOAuthFlows: ['code'],
+        AllowedOAuthScopes: ['openid', 'email', 'profile'],
+        AllowedOAuthFlowsUserPoolClient: true,
+        SupportedIdentityProviders: ['COGNITO'],
+        ExplicitAuthFlows: ['ALLOW_USER_SRP_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+        PreventUserExistenceErrors: 'ENABLED',
+        EnableTokenRevocation: true,
+        AccessTokenValidity: 60,
+        IdTokenValidity: 60,
+        RefreshTokenValidity: 43200,
+        TokenValidityUnits: { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'minutes' },
+      },
+      physicalResourceId: PhysicalResourceId.of(`${userPoolClientId}-callback-urls`),
+    };
+    const oauthClientUpdater = new AwsCustomResource(this, 'OAuthClientCallbackUrls', {
+      onCreate: oauthClientPatch,
+      onUpdate: oauthClientPatch,
+      policy: AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ['cognito-idp:UpdateUserPoolClient'],
+          resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${userPoolId}`],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+    // Only meaningful after the distribution's domain name actually exists.
+    oauthClientUpdater.node.addDependency(this.distribution);
+
+    new CfnOutput(this, 'DashboardUrl', { value: dashboardUrl });
     new CfnOutput(this, 'DashboardBucketName', { value: this.bucket.bucketName });
     new CfnOutput(this, 'DistributionId', { value: this.distribution.distributionId });
   }

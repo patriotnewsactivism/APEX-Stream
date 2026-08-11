@@ -76,6 +76,9 @@ const frontend = new FrontendStack(app, `${prefix}-Frontend`, {
   env,
   config,
   loadBalancer: compute.loadBalancer,
+  userPoolId: auth.userPool.userPoolId,
+  userPoolClientId: auth.userPoolClient.userPoolClientId,
+  hostedUiDomain: auth.userPoolDomain.baseUrl(),
 });
 
 new ObservabilityStack(app, `${prefix}-Observability`, {
@@ -96,6 +99,7 @@ compute.addDependency(data);
 compute.addDependency(messaging);
 compute.addDependency(auth);
 frontend.addDependency(compute);
+frontend.addDependency(auth);
 
 // Tags drive cost allocation — the budget filter in ObservabilityStack keys
 // off Project, so every resource must carry it.
