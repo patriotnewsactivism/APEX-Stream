@@ -13,6 +13,7 @@ RUN npm ci --ignore-scripts
 
 COPY packages packages
 COPY services/orchestrator services/orchestrator
+COPY db db
 RUN npm run build -w @apex/core \
  && npm run build -w @apex/agent-runtime \
  && npm run build -w @apex/workflow-engine \
@@ -30,6 +31,7 @@ RUN apk add --no-cache tini && addgroup -S apex && adduser -S apex -G apex
 COPY --from=build --chown=apex:apex /repo/node_modules ./node_modules
 COPY --from=build --chown=apex:apex /repo/packages ./packages
 COPY --from=build --chown=apex:apex /repo/services/orchestrator ./services/orchestrator
+COPY --from=build --chown=apex:apex /repo/db ./db
 COPY --from=build --chown=apex:apex /repo/package.json ./package.json
 
 USER apex
