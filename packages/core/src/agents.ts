@@ -50,6 +50,22 @@ export const AGENT_REGISTRY: Record<AgentId, AgentDescriptor> = {
     maxConcurrency: 8,
     costPerTaskMinuteUsd: 0.0009,
   },
+  // Warden is the only agent that reads a channel the operator owns rather
+  // than a third party's public surface, and the only one whose output is
+  // addressed to a human for a decision rather than filed as a finding. It
+  // still cannot act: posting and moderating are orchestrator operations
+  // gated on an explicit human approval.
+  warden: {
+    id: 'warden',
+    displayName: 'Warden',
+    role: 'Community watch — live chat and comment ingestion, hostility classification, drafted replies',
+    scopes: AGENT_SCOPES.warden ?? [],
+    queueName: 'warden-tasks',
+    memoryNamespace: 'mem:warden',
+    maxConcurrency: 6,
+    // Higher than the text agents: every comment costs a model invocation.
+    costPerTaskMinuteUsd: 0.0034,
+  },
 };
 
 export function getAgent(id: AgentId): AgentDescriptor {

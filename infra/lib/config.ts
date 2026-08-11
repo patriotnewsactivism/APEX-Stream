@@ -33,7 +33,7 @@ export interface ApexEnvConfig {
   /** Fargate Spot is ~70% cheaper and fine for interruptible collectors. */
   useFargateSpot: boolean;
   orchestrator: { cpu: number; memoryMiB: number; minCount: number; maxCount: number };
-  agents: Record<'aria' | 'atlas' | 'sentinel' | 'archivist', { cpu: number; memoryMiB: number; minCount: number; maxCount: number }>;
+  agents: Record<'aria' | 'atlas' | 'sentinel' | 'archivist' | 'warden', { cpu: number; memoryMiB: number; minCount: number; maxCount: number }>;
   evidenceRetentionYears: number;
   logRetentionDays: number;
   /** Monthly spend that triggers an alert. Set it below your credit burn rate. */
@@ -49,6 +49,11 @@ const AGENT_SIZES_DEV: ApexEnvConfig['agents'] = {
   // scales to zero when nothing is being watched — it is the expensive agent.
   sentinel: { cpu: 1024, memoryMiB: 2048, minCount: 0, maxCount: 3 },
   archivist: { cpu: 256, memoryMiB: 512, minCount: 1, maxCount: 4 },
+  // Warden is I/O-bound, not compute-bound: it waits on YouTube and on model
+  // calls. It stays at one task because live chat has a single cursor per
+  // source — a second task would race the first for the same page, spend the
+  // same quota twice, and gain nothing.
+  warden: { cpu: 256, memoryMiB: 512, minCount: 1, maxCount: 1 },
 };
 
 const AGENT_SIZES_PROD: ApexEnvConfig['agents'] = {
@@ -56,6 +61,9 @@ const AGENT_SIZES_PROD: ApexEnvConfig['agents'] = {
   atlas: { cpu: 1024, memoryMiB: 2048, minCount: 1, maxCount: 10 },
   sentinel: { cpu: 2048, memoryMiB: 4096, minCount: 0, maxCount: 6 },
   archivist: { cpu: 512, memoryMiB: 1024, minCount: 1, maxCount: 8 },
+  // Still one task, for the live-chat cursor reason above — production buys it
+  // more headroom per task rather than more tasks.
+  warden: { cpu: 512, memoryMiB: 1024, minCount: 1, maxCount: 1 },
 };
 
 export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {

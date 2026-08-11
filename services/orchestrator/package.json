@@ -13,6 +13,7 @@
     "@apex/core": "*",
     "@apex/agent-runtime": "*",
     "@apex/workflow-engine": "*",
+    "@apex/youtube": "*",
     "@aws-sdk/client-sqs": "^3.700.0",
     "@aws-sdk/client-eventbridge": "^3.700.0",
     "@aws-sdk/client-secrets-manager": "^3.700.0",

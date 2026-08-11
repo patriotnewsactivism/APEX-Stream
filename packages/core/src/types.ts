@@ -7,7 +7,7 @@
  */
 
 /** Canonical agent identifiers. Adding an agent means adding it here first. */
-export const AGENT_IDS = ['aria', 'atlas', 'sentinel', 'archivist'] as const;
+export const AGENT_IDS = ['aria', 'atlas', 'sentinel', 'archivist', 'warden'] as const;
 export type AgentId = (typeof AGENT_IDS)[number];
 
 /** Orchestrator is not an agent — it is the control plane that commands them. */
@@ -61,7 +61,9 @@ export type SourceKind =
   | 'social'
   | 'court_docket'
   | 'live_stream'
-  | 'upload';
+  | 'upload'
+  | 'youtube_live_chat'
+  | 'youtube_video';
 
 export interface MonitoredSource {
   id: string;

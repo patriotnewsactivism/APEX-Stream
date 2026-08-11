@@ -49,6 +49,9 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
       'user:*',
       'config:read',
       'config:write',
+      'comment:*',
+      'reply:*',
+      'credential:*',
     ],
     denies: ['evidence:delete', 'billing:*', 'audit:write'],
   },
@@ -73,8 +76,25 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
       'anomaly:acknowledge',
       'evidence:read',
       'audit:read',
+      'comment:read',
+      'comment:label',
+      'reply:read',
+      // Approving a draft is what puts words on the channel under the
+      // operator's name. It sits with the role that runs the channel day to
+      // day, not with analysts.
+      'reply:approve',
+      'credential:read',
     ],
-    denies: ['evidence:delete', 'evidence:export', 'user:*', 'config:write', 'billing:*'],
+    denies: [
+      'evidence:delete',
+      'evidence:export',
+      'user:*',
+      'config:write',
+      'billing:*',
+      // Connecting an account hands the system a refresh token that can write
+      // to the channel indefinitely. That is an ownership decision.
+      'credential:connect',
+    ],
   },
   analyst: {
     role: 'analyst',
@@ -90,8 +110,18 @@ export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
       'anomaly:read',
       'anomaly:acknowledge',
       'evidence:read',
+      'comment:read',
+      'reply:read',
     ],
-    denies: ['agent:beast_mode', 'evidence:delete', 'evidence:export', 'user:*', 'billing:*'],
+    denies: [
+      'agent:beast_mode',
+      'evidence:delete',
+      'evidence:export',
+      'user:*',
+      'billing:*',
+      'reply:approve',
+      'credential:*',
+    ],
   },
   viewer: {
     role: 'viewer',
@@ -158,4 +188,9 @@ export const AGENT_SCOPES: Record<string, string[]> = {
   atlas: ['source:read', 'observation:write', 'anomaly:write', 'memory:atlas'],
   sentinel: ['source:read', 'observation:write', 'anomaly:write', 'stream:consume', 'memory:sentinel'],
   archivist: ['observation:read', 'anomaly:read', 'evidence:write', 'evidence:read', 'memory:archivist'],
+  // No `reply:post` and no `comment:moderate`. Warden drafts and classifies;
+  // the act of publishing a reply belongs to the orchestrator, behind a human
+  // approval, so the agent is not holding a capability it must be trusted not
+  // to use.
+  warden: ['source:read', 'comment:write', 'comment:read', 'reply:draft', 'memory:warden'],
 };

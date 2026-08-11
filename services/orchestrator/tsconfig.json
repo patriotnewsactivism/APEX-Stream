@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../packages/core" },
     { "path": "../../packages/agent-runtime" },
-    { "path": "../../packages/workflow-engine" }
+    { "path": "../../packages/workflow-engine" },
+    { "path": "../../packages/youtube" }
   ]
 }

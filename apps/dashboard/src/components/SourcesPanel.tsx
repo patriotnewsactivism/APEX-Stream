@@ -50,14 +50,33 @@ const KINDS: KindSpec[] = [
     urlHint: 'https://example.com/some/page',
   },
   {
+    kind: 'youtube_live_chat',
+    label: 'YouTube live chat (your channel)',
+    agent: 'warden',
+    does:
+      'Warden follows whatever broadcast your channel currently has live and reads its chat, classifying ' +
+      'each message. Nothing happens while you are not live. The URL is only a label here.',
+    polled: false,
+    urlHint: 'https://www.youtube.com/@yourchannel',
+  },
+  {
+    kind: 'youtube_video',
+    label: 'YouTube video comments',
+    agent: 'warden',
+    does:
+      "Warden reads this video's comment thread on the interval you set and classifies each comment.",
+    polled: true,
+    urlHint: 'https://www.youtube.com/watch?v=…',
+  },
+  {
     kind: 'social',
-    label: 'Social page',
+    label: 'Social page (public HTML only)',
     agent: 'atlas',
     does:
       'Atlas fetches the page HTML and diffs it, exactly like any other web page. It does not sign in, ' +
-      'read comments, or read live chat — see the note below the table.',
+      'read comments, or read live chat — use a YouTube source above for that.',
     polled: true,
-    urlHint: 'https://www.youtube.com/@yourchannel/community',
+    urlHint: 'https://example.com/some/profile',
   },
   {
     kind: 'court_docket',
@@ -92,6 +111,7 @@ const AGENT_NAMES: Record<OwnerAgent, string> = {
   atlas: 'Atlas',
   sentinel: 'Sentinel',
   archivist: 'Archivist',
+  warden: 'Warden',
 };
 
 const BLANK = {
@@ -368,11 +388,12 @@ export function SourcesPanel({
       )}
 
       <div className="banner banner-warn" style={{ marginTop: 20 }}>
-        <strong>What this list cannot do yet.</strong> Every agent here only reads. Nothing in APEX Stream
-        signs in to YouTube or Facebook, reads live chat or comment threads, posts a reply, hides or deletes
-        a comment, or bans an account. A <em>Social page</em> source fetches public page HTML and diffs it —
-        that is the whole of it. Live-chat monitoring, comment moderation and automated replies need a new
-        agent with platform API credentials; they are not wired up in this build.
+        <strong>What this list can and cannot reach.</strong> The two YouTube kinds sign in to your own
+        channel and read its live chat and comments — set that up under Comments. Everything else here
+        only reads public surfaces: a <em>Social page</em> source fetches page HTML and diffs it, nothing
+        more. Nothing in APEX Stream hides, deletes, or bans on any platform, and the only thing it ever
+        posts is a reply you approved. Facebook is not supported: Meta provides no API for comments on
+        personal profile posts.
       </div>
     </div>
   );

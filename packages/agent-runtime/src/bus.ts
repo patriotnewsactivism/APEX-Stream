@@ -118,7 +118,11 @@ export type ApexEventType =
   | 'run.status_changed'
   | 'task.completed'
   | 'task.failed'
-  | 'budget.threshold_crossed';
+  | 'budget.threshold_crossed'
+  // Warden flagged a comment as something other than routine. Carries the
+  // classification only — never an action, since nothing acts without a human.
+  | 'comment.flagged'
+  | 'reply.posted';
 
 /**
  * EventBridge is the fan-out spine: agents publish facts, and workflows,

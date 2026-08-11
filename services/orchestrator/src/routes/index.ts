@@ -18,6 +18,7 @@ import type { BeastController } from '../beast.js';
 import type { AuditWriter, Database } from '../db.js';
 import type { Dispatcher } from '../dispatcher.js';
 import { buildEffects } from '../effects.js';
+import { registerCommentRoutes } from './comments.js';
 import type { Config } from '../config.js';
 
 export interface RouteDeps {
@@ -182,6 +183,9 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
     });
     return row;
   });
+
+  // ---- comment triage, reply approval, channel connection -----------------
+  await registerCommentRoutes(app, { config, db, audit, log });
 
   // ---- anomalies ----------------------------------------------------------
   app.get('/api/anomalies', { preHandler: guard('anomaly:read') }, async (request) => {

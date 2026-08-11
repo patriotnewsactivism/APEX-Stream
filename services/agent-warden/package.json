@@ -1,0 +1,22 @@
+{
+  "name": "@apex/agent-warden",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node dist/index.js",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@apex/core": "*",
+    "@apex/agent-runtime": "*",
+    "@apex/youtube": "*",
+    "@anthropic-ai/bedrock-sdk": "^0.30.0",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10"
+  }
+}
