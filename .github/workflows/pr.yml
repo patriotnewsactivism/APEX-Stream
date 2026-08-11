@@ -53,6 +53,23 @@ jobs:
           CDK_DEFAULT_ACCOUNT: '000000000000'
           CDK_DEFAULT_REGION: us-east-1
         run: |
+          # NetworkStack's Vpc asks for the region's availability zones. That is a
+          # context lookup, and on a stack with a concrete account CDK resolves it by
+          # calling EC2 -- which a PR check has no credentials for, by design. Seeding
+          # the answer in cdk.context.json (gitignored, since it is normally an
+          # account-specific cache) keeps synth offline.
+          #
+          # Going environment-agnostic instead does not work here: AuthStack builds its
+          # Cognito domain prefix from `this.account.slice(-6)`, and slicing the
+          # unresolved account token yields characters Cognito rejects.
+          cat > cdk.context.json <<JSON
+          {
+            "availability-zones:account=${CDK_DEFAULT_ACCOUNT}:region=${CDK_DEFAULT_REGION}": [
+              "${CDK_DEFAULT_REGION}a",
+              "${CDK_DEFAULT_REGION}b"
+            ]
+          }
+          JSON
           npm run build
           npx cdk synth --quiet
 
