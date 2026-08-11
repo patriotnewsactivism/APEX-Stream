@@ -142,6 +142,38 @@ export interface EvidenceItem {
   chain_of_custody: Array<{ at: string; actor: string; action: string; detail: string; entryHash: string }>;
 }
 
+/** Raw `sources` row as the orchestrator returns it (snake_case, straight from Postgres). */
+export interface Source {
+  id: string;
+  kind: SourceKind;
+  label: string;
+  url: string;
+  interval_seconds: number;
+  enabled: boolean;
+  owner_agent: OwnerAgent;
+  tags: string[];
+  authority: string | number;
+  last_polled_at: string | null;
+  consecutive_failures: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type SourceKind = 'rss' | 'http_api' | 'web_page' | 'social' | 'court_docket' | 'live_stream' | 'upload';
+export type OwnerAgent = 'aria' | 'atlas' | 'sentinel' | 'archivist';
+
+export interface SourceInput {
+  kind: SourceKind;
+  label: string;
+  url: string;
+  intervalSeconds: number;
+  ownerAgent: OwnerAgent;
+  tags: string[];
+  authority: number;
+  enabled: boolean;
+}
+
 export interface AuditEntry {
   sequence: number;
   recordedAt: string;
@@ -172,6 +204,11 @@ export const api = {
     return request<Anomaly[]>(`/api/anomalies?${q}`);
   },
   acknowledgeAnomaly: (id: string) => request<Anomaly>(`/api/anomalies/${id}/acknowledge`, { method: 'POST' }),
+  sources: () => request<Source[]>('/api/sources'),
+  createSource: (body: SourceInput) =>
+    request<Source>('/api/sources', { method: 'POST', body: JSON.stringify(body) }),
+  updateSource: (id: string, body: Partial<SourceInput>) =>
+    request<Source>(`/api/sources/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   beastPreflight: (body: { durationMinutes: number; budgetUsd: number; sourceTags: string[] }) =>
     request<BeastPreflight>('/api/beast/preflight', { method: 'POST', body: JSON.stringify(body) }),
   beastActivate: (body: { durationMinutes: number; budgetUsd: number; sourceTags: string[] }) =>
