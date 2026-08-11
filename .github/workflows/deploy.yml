@@ -149,10 +149,14 @@ jobs:
         working-directory: infra
         env:
           APEX_ALERT_EMAIL: ${{ vars.APEX_ALERT_EMAIL }}
+          APEX_DASHBOARD_DOMAIN: ${{ vars.APEX_DASHBOARD_DOMAIN }}
+          APEX_DASHBOARD_CERT_ARN: ${{ vars.APEX_DASHBOARD_CERT_ARN }}
         run: |
           npx cdk deploy --all \
             --context env=$APEX_ENV \
             --context alertEmail="$APEX_ALERT_EMAIL" \
+            --context dashboardDomain="$APEX_DASHBOARD_DOMAIN" \
+            --context dashboardCertificateArn="$APEX_DASHBOARD_CERT_ARN" \
             --require-approval never \
             --outputs-file cdk-outputs.json \
             --progress events

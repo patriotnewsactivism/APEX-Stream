@@ -15,6 +15,9 @@ const app = new App();
 const envName = (app.node.tryGetContext('env') ?? process.env.APEX_ENV ?? 'dev') as EnvName;
 const alertEmail = app.node.tryGetContext('alertEmail') ?? process.env.APEX_ALERT_EMAIL ?? '';
 const dashboardOrigin = app.node.tryGetContext('dashboardOrigin') ?? process.env.APEX_DASHBOARD_ORIGIN ?? '*';
+const dashboardDomain = app.node.tryGetContext('dashboardDomain') ?? process.env.APEX_DASHBOARD_DOMAIN ?? undefined;
+const dashboardCertificateArn =
+  app.node.tryGetContext('dashboardCertificateArn') ?? process.env.APEX_DASHBOARD_CERT_ARN ?? undefined;
 
 if (!['dev', 'staging', 'prod'].includes(envName)) {
   throw new Error(`unknown environment "${envName}" — expected dev, staging or prod`);
@@ -79,6 +82,8 @@ const frontend = new FrontendStack(app, `${prefix}-Frontend`, {
   userPoolId: auth.userPool.userPoolId,
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   hostedUiDomain: auth.userPoolDomain.baseUrl(),
+  domainName: dashboardDomain || undefined,
+  certificateArn: dashboardCertificateArn || undefined,
 });
 
 new ObservabilityStack(app, `${prefix}-Observability`, {

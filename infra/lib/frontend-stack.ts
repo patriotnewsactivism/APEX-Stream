@@ -1,4 +1,5 @@
 import { CfnOutput, CustomResource, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -29,10 +30,19 @@ export class FrontendStack extends Stack {
       userPoolId: string;
       userPoolClientId: string;
       hostedUiDomain: string;
+      /**
+       * Optional custom domain (e.g. apexstream.donmatthews.live) for the
+       * dashboard. Both this.domainName and the CloudFront-generated domain
+       * keep working -- the custom domain is an alias, not a replacement, so
+       * nothing breaks if DNS or the certificate isn't ready yet.
+       */
+      domainName?: string;
+      /** Must be an ACM cert in us-east-1 (CloudFront's hard requirement), already ISSUED. */
+      certificateArn?: string;
     },
   ) {
     super(scope, id, props);
-    const { config, loadBalancer, userPoolId, userPoolClientId, hostedUiDomain } = props;
+    const { config, loadBalancer, userPoolId, userPoolClientId, hostedUiDomain, domainName, certificateArn } = props;
 
     this.bucket = new s3.Bucket(this, 'DashboardBucket', {
       bucketName: `apex-${config.envName}-dashboard-${this.account}`,
@@ -74,8 +84,13 @@ export class FrontendStack extends Stack {
       },
     });
 
+    const customDomain = domainName && certificateArn ? { domainName, certificateArn } : undefined;
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `APEX Stream ${config.envName} command dashboard`,
+      domainNames: customDomain ? [customDomain.domainName] : undefined,
+      certificate: customDomain
+        ? acm.Certificate.fromCertificateArn(this, 'DashboardCertificate', customDomain.certificateArn)
+        : undefined,
       defaultRootObject: 'index.html',
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
@@ -110,7 +125,11 @@ export class FrontendStack extends Stack {
       enableLogging: config.envName === 'prod',
     });
 
-    const dashboardUrl = `https://${this.distribution.distributionDomainName}`;
+    // The custom domain is the one operators should actually use and bookmark;
+    // the raw CloudFront domain stays valid too (kept in Cognito's allow-list
+    // below) so nothing breaks for anyone still on the old link.
+    const dashboardUrl = customDomain ? `https://${customDomain.domainName}` : `https://${this.distribution.distributionDomainName}`;
+    const cloudfrontUrl = `https://${this.distribution.distributionDomainName}`;
 
     // The Cognito app client's callback/logout URLs must allow this exact
     // origin, but that origin (CloudFront's generated domain name) is only
@@ -129,8 +148,15 @@ export class FrontendStack extends Stack {
         UserPoolId: userPoolId,
         ClientId: userPoolClientId,
         ClientName: `apex-${config.envName}-dashboard`,
-        CallbackURLs: ['http://localhost:5173/callback', 'https://localhost:5173/callback', `${dashboardUrl}/callback`],
-        LogoutURLs: ['http://localhost:5173', dashboardUrl],
+        CallbackURLs: Array.from(
+          new Set([
+            'http://localhost:5173/callback',
+            'https://localhost:5173/callback',
+            `${cloudfrontUrl}/callback`,
+            `${dashboardUrl}/callback`,
+          ]),
+        ),
+        LogoutURLs: Array.from(new Set(['http://localhost:5173', cloudfrontUrl, dashboardUrl])),
         AllowedOAuthFlows: ['code'],
         AllowedOAuthScopes: ['openid', 'email', 'profile'],
         AllowedOAuthFlowsUserPoolClient: true,
