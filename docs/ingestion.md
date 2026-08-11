@@ -15,6 +15,7 @@ source's signals count toward a final score), and failure tracking
 | `web_page`, `social`, `court_docket` | Atlas (`src/page.ts`) | Page fetch/diff; social and docket sources still route here since they're fundamentally "fetch a page, extract structured signal" |
 | `live_stream` | Sentinel (`src/stream.ts`) | Long-lived connection, not interval-polled |
 | `upload` | Archivist (`src/vault.ts`) | Operator- or API-submitted evidence, not polled at all |
+| `youtube_live_chat`, `youtube_video` | Warden (`src/index.ts`) | The operator's own channel, via the YouTube Data API |
 
 ## API / web / live-stream ingestion
 
@@ -53,23 +54,29 @@ by the database but never polled by anything.
 The screen is a client for `/api/sources` (`GET`/`POST`/`PATCH`), so the same
 thing can be done by API, or by inserting into `sources` directly. The check
 constraints (`kind IN (...)`,
-`owner_agent IN ('aria','atlas','sentinel','archivist')`) mean a typo fails at
+`owner_agent IN ('aria','atlas','sentinel','archivist','warden')`) mean a typo fails at
 the database, not silently at runtime. There is no separate "ingestion config"
 file to keep in sync.
 
 ## What is not ingested
 
-Worth stating explicitly, because the `social` kind invites the assumption:
-**no agent authenticates to a social platform.** A `social` source is fetched
-by Atlas as ordinary public HTML and diffed like any other page. Nothing here
-reads a YouTube live chat or a Facebook comment thread, and nothing here
-writes back to a platform at all — there is no code path that posts a reply,
-hides or deletes a comment, or bans an account. Every agent is read-only by
-construction.
+**YouTube is authenticated; everything else is not.** Warden signs in to the
+operator's own channel with an OAuth grant and reads its live chat and comment
+threads — see [`youtube.md`](youtube.md). Every other agent is read-only against
+public surfaces.
 
-Supporting live comment ingestion would mean a new agent with YouTube Data API
-/ Meta Graph API OAuth credentials, a token store, and new `sources.kind` +
-`owner_agent` values (a migration — see [`agents.md`](agents.md), "Adding a
-fifth agent"). Moderation would additionally mean the first write-capable
-egress in the system, which the audit ledger and RBAC model would need to
-cover.
+The `social` kind is the one that invites a wrong assumption. It is fetched by
+Atlas as ordinary public HTML and diffed like any other page: no sign-in, no
+comments, no live chat.
+
+**Facebook is not supported and cannot be, for personal profiles.** Meta
+provides no API for reading or moderating comments on personal profile posts —
+it was removed after Cambridge Analytica. Comment access exists only for
+Facebook *Pages*, via the Graph API with `pages_read_engagement` /
+`pages_manage_engagement`. Supporting Pages would mean a Meta app and a second
+integration alongside Warden's YouTube one; supporting personal profiles is not
+a matter of effort, the endpoint does not exist.
+
+The one write path in the whole system is a reply the operator has approved
+(`services/orchestrator/src/routes/comments.ts`). Nothing hides, deletes or bans
+on any platform.

@@ -19,6 +19,7 @@ const schema = z.object({
   QUEUE_URL_ATLAS: z.string().url(),
   QUEUE_URL_SENTINEL: z.string().url(),
   QUEUE_URL_ARCHIVIST: z.string().url(),
+  QUEUE_URL_WARDEN: z.string().url(),
 
   EVIDENCE_BUCKET: z.string().min(1),
   MEMORY_TABLE: z.string().min(1),
@@ -58,6 +59,7 @@ export function queueUrlFor(config: Config, agentId: string): string {
     atlas: config.QUEUE_URL_ATLAS,
     sentinel: config.QUEUE_URL_SENTINEL,
     archivist: config.QUEUE_URL_ARCHIVIST,
+    warden: config.QUEUE_URL_WARDEN,
   };
   const url = map[agentId];
   if (!url) throw new Error(`no queue configured for agent "${agentId}"`);

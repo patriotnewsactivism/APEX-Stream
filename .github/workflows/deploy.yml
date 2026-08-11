@@ -68,7 +68,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [orchestrator, agent-aria, agent-atlas, agent-sentinel, agent-archivist]
+        service: [orchestrator, agent-aria, agent-atlas, agent-sentinel, agent-archivist, agent-warden]
     steps:
       - uses: actions/checkout@v4
 

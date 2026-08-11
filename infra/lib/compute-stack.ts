@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, SecretValue, Stack, type StackProps } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
@@ -65,7 +65,7 @@ function asPlainSecretRef(scope: Construct, id: string, secret: secretsmanager.I
   return secretsmanager.Secret.fromSecretCompleteArn(scope, id, secret.secretArn);
 }
 
-const AGENTS = ['aria', 'atlas', 'sentinel', 'archivist'] as const;
+const AGENTS = ['aria', 'atlas', 'sentinel', 'archivist', 'warden'] as const;
 type AgentName = (typeof AGENTS)[number];
 
 export interface ComputeStackProps extends StackProps {
@@ -192,6 +192,28 @@ export class ComputeStack extends Stack {
 
     // -----------------------------------------------------------------------
     // Orchestrator — the only service exposed to the internet
+    /**
+     * Google OAuth client for the YouTube integration.
+     *
+     * Created empty and filled in by hand after deploy — the client secret is
+     * issued by Google in a browser, so there is nothing for CI to inject, and
+     * a placeholder in the template is better than a real secret in a
+     * CloudFormation parameter (which would be readable in the console and in
+     * every stack event afterwards).
+     *
+     * Warden gets it to read comments; the orchestrator gets it to exchange
+     * the authorisation code and to post approved replies. Nothing else does.
+     */
+    const youtubeOAuth = new secretsmanager.Secret(this, 'YouTubeOAuthClient', {
+      secretName: `apex/${config.envName}/youtube-oauth`,
+      description: 'Google OAuth client for YouTube comment monitoring. Fill in after deploy — see docs/youtube.md',
+      encryptionKey: secretsKey,
+      secretObjectValue: {
+        clientId: SecretValue.unsafePlainText('replace-me'),
+        clientSecret: SecretValue.unsafePlainText('replace-me'),
+      },
+    });
+
     // -----------------------------------------------------------------------
     const orchestratorRole = new iam.Role(this, 'OrchestratorTaskRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
@@ -205,6 +227,7 @@ export class ComputeStack extends Stack {
     evidenceBucket.grantRead(orchestratorRole); // read for review; never write
     evidenceKey.grantDecrypt(orchestratorRole);
     grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, orchestratorRole);
+    grantSecretReadWithoutCycle(youtubeOAuth, secretsKey.keyArn, orchestratorRole);
     dataKey.grantEncryptDecrypt(orchestratorRole);
 
     const orchestratorTask = new ecs.FargateTaskDefinition(this, 'OrchestratorTask', {
@@ -230,12 +253,19 @@ export class ComputeStack extends Stack {
         QUEUE_URL_ATLAS: queues.atlas.queueUrl,
         QUEUE_URL_SENTINEL: queues.sentinel.queueUrl,
         QUEUE_URL_ARCHIVIST: queues.archivist.queueUrl,
+        QUEUE_URL_WARDEN: queues.warden.queueUrl,
         BEAST_MAX_BUDGET_USD: String(Math.floor(config.monthlyBudgetUsd / 10)),
         BEAST_MAX_DURATION_MINUTES: '120',
         BEAST_MAX_CONCURRENT_TASKS: '24',
       },
       secrets: {
         DATABASE_URL: ecs.Secret.fromSecretsManager(asPlainSecretRef(this, 'OrchestratorDbSecretRef', database.secret), 'uri'),
+        YOUTUBE_CLIENT_ID: ecs.Secret.fromSecretsManager(
+          asPlainSecretRef(this, 'OrchestratorYouTubeSecretRef', youtubeOAuth), 'clientId',
+        ),
+        YOUTUBE_CLIENT_SECRET: ecs.Secret.fromSecretsManager(
+          asPlainSecretRef(this, 'OrchestratorYouTubeSecretRef2', youtubeOAuth), 'clientSecret',
+        ),
       },
       portMappings: [{ containerPort: 8080, protocol: ecs.Protocol.TCP }],
       healthCheck: {
@@ -319,11 +349,11 @@ export class ComputeStack extends Stack {
         description: `APEX ${agent} - scoped to its own queue and memory partition`,
       });
 
-      // Bedrock as a last-resort LLM fallback, IAM-only (no API key to manage or leak,
-      // since these tasks already run under an IAM role). No agent calls out to an LLM
-      // yet as of this commit -- this only makes the permission available ahead of that
-      // code landing. Scoped to Bedrock's foundation-model resource type in this account
-      // and region rather than a bare '*' on all actions.
+      // Bedrock, IAM-only (no API key to manage or leak, since these tasks already run
+      // under an IAM role). Warden uses this for comment classification and reply
+      // drafting; the other three do not call an LLM yet, and keeping the grant uniform
+      // costs nothing they can act on. Scoped to Bedrock's foundation-model resource type
+      // in this account and region rather than a bare '*' on all actions.
       taskRole.addToPolicy(
         new iam.PolicyStatement({
           actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
@@ -338,6 +368,7 @@ export class ComputeStack extends Stack {
       queue.grantConsumeMessages(taskRole);
       eventBus.grantPutEventsTo(taskRole);
       grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, taskRole);
+      if (agent === 'warden') grantSecretReadWithoutCycle(youtubeOAuth, secretsKey.keyArn, taskRole);
       dataKey.grantEncryptDecrypt(taskRole);
 
       /**
@@ -400,7 +431,20 @@ export class ComputeStack extends Stack {
           logRetention: config.logRetentionDays as logs.RetentionDays,
         }),
         environment: { ...sharedEnvironment, APEX_AGENT_ID: agent, QUEUE_URL: queue.queueUrl },
-        secrets: { DATABASE_URL: ecs.Secret.fromSecretsManager(asPlainSecretRef(this, `${cap(agent)}DbSecretRef`, database.secret), 'uri') },
+        secrets: {
+          DATABASE_URL: ecs.Secret.fromSecretsManager(asPlainSecretRef(this, `${cap(agent)}DbSecretRef`, database.secret), 'uri'),
+          // Only Warden talks to YouTube. The other three never see the client.
+          ...(agent === 'warden'
+            ? {
+                YOUTUBE_CLIENT_ID: ecs.Secret.fromSecretsManager(
+                  asPlainSecretRef(this, 'WardenYouTubeSecretRef', youtubeOAuth), 'clientId',
+                ),
+                YOUTUBE_CLIENT_SECRET: ecs.Secret.fromSecretsManager(
+                  asPlainSecretRef(this, 'WardenYouTubeSecretRef2', youtubeOAuth), 'clientSecret',
+                ),
+              }
+            : {}),
+        },
         portMappings: [{ containerPort: 8080, protocol: ecs.Protocol.TCP }],
         // Long enough for the runtime's 25-second drain to finish in-flight work.
         stopTimeout: Duration.seconds(60),

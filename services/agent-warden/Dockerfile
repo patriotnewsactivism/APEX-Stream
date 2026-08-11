@@ -9,16 +9,16 @@ COPY packages/core/package.json packages/core/
 COPY packages/agent-runtime/package.json packages/agent-runtime/
 COPY packages/workflow-engine/package.json packages/workflow-engine/
 COPY packages/youtube/package.json packages/youtube/
-COPY services/agent-sentinel/package.json services/agent-sentinel/
+COPY services/agent-warden/package.json services/agent-warden/
 RUN npm ci --ignore-scripts
 
 COPY packages packages
-COPY services/agent-sentinel services/agent-sentinel
+COPY services/agent-warden services/agent-warden
 RUN npm run build -w @apex/core \
  && npm run build -w @apex/agent-runtime \
  && npm run build -w @apex/workflow-engine \
  && npm run build -w @apex/youtube \
- && npm run build -w $(node -p "require('./services/agent-sentinel/package.json').name")
+ && npm run build -w $(node -p "require('./services/agent-warden/package.json').name")
 
 # Drop dev dependencies from the layer that ships.
 RUN npm prune --omit=dev
@@ -31,7 +31,7 @@ RUN apk add --no-cache tini && addgroup -S apex && adduser -S apex -G apex
 
 COPY --from=build --chown=apex:apex /repo/node_modules ./node_modules
 COPY --from=build --chown=apex:apex /repo/packages ./packages
-COPY --from=build --chown=apex:apex /repo/services/agent-sentinel ./services/agent-sentinel
+COPY --from=build --chown=apex:apex /repo/services/agent-warden ./services/agent-warden
 COPY --from=build --chown=apex:apex /repo/package.json ./package.json
 
 USER apex
@@ -41,4 +41,4 @@ EXPOSE 8080
 ENTRYPOINT ["/sbin/tini", "--"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||8080)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "services/agent-sentinel/dist/index.js"]
+CMD ["node", "services/agent-warden/dist/index.js"]

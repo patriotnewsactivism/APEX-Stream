@@ -34,9 +34,10 @@ jobs:
           npm run build -w @apex/core
           npm run build -w @apex/agent-runtime
           npm run build -w @apex/workflow-engine
+          npm run build -w @apex/youtube
 
       - name: Typecheck services
-        run: npx tsc -b services/orchestrator services/agent-aria services/agent-atlas services/agent-sentinel services/agent-archivist
+        run: npx tsc -b services/orchestrator services/agent-aria services/agent-atlas services/agent-sentinel services/agent-archivist services/agent-warden
 
       - name: Unit tests
         run: |
@@ -75,7 +76,7 @@ jobs:
 
       - name: Build container images
         run: |
-          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist; do
+          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist agent-warden; do
             echo "::group::$service"
             docker build -f "services/$service/Dockerfile" -t "apex-$service:pr" .
             echo "::endgroup::"

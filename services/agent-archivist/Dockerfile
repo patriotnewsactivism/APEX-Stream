@@ -8,6 +8,7 @@ COPY package.json package-lock.json* tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/agent-runtime/package.json packages/agent-runtime/
 COPY packages/workflow-engine/package.json packages/workflow-engine/
+COPY packages/youtube/package.json packages/youtube/
 COPY services/agent-archivist/package.json services/agent-archivist/
 RUN npm ci --ignore-scripts
 
@@ -16,6 +17,7 @@ COPY services/agent-archivist services/agent-archivist
 RUN npm run build -w @apex/core \
  && npm run build -w @apex/agent-runtime \
  && npm run build -w @apex/workflow-engine \
+ && npm run build -w @apex/youtube \
  && npm run build -w $(node -p "require('./services/agent-archivist/package.json').name")
 
 # Drop dev dependencies from the layer that ships.

@@ -142,6 +142,54 @@ export interface EvidenceItem {
   chain_of_custody: Array<{ at: string; actor: string; action: string; detail: string; entryHash: string }>;
 }
 
+export type CommentCategory =
+  | 'praise' | 'question' | 'neutral' | 'criticism'
+  | 'hostile' | 'harassment' | 'threat' | 'spam';
+
+export interface QueuedComment {
+  id: string;
+  author_display_name: string;
+  author_channel_url: string | null;
+  body: string;
+  published_at: string;
+  is_live_chat: boolean;
+  video_id: string | null;
+  source_label: string;
+  category: CommentCategory | null;
+  severity: string | number | null;
+  confidence: string | number | null;
+  rationale: string | null;
+  model: string | null;
+  operator_label: 'troll' | 'not_troll' | null;
+  labelled_at: string | null;
+  draft_id: string | null;
+  draft_text: string | null;
+  draft_status: string | null;
+}
+
+export interface ReplyDraft {
+  id: string;
+  comment_id: string;
+  draft_text: string;
+  status: string;
+  model: string;
+  created_at: string;
+  author_display_name: string;
+  comment_body: string;
+  is_live_chat: boolean;
+  category: CommentCategory | null;
+  severity: string | number | null;
+  rationale: string | null;
+}
+
+export interface YouTubeStatus {
+  connected: boolean;
+  channel: { id: string; title: string } | null;
+  connectedAt: string | null;
+  lastError: string | null;
+  clientId: string | null;
+}
+
 /** Raw `sources` row as the orchestrator returns it (snake_case, straight from Postgres). */
 export interface Source {
   id: string;
@@ -160,8 +208,10 @@ export interface Source {
   updated_at: string;
 }
 
-export type SourceKind = 'rss' | 'http_api' | 'web_page' | 'social' | 'court_docket' | 'live_stream' | 'upload';
-export type OwnerAgent = 'aria' | 'atlas' | 'sentinel' | 'archivist';
+export type SourceKind =
+  | 'rss' | 'http_api' | 'web_page' | 'social' | 'court_docket' | 'live_stream' | 'upload'
+  | 'youtube_live_chat' | 'youtube_video';
+export type OwnerAgent = 'aria' | 'atlas' | 'sentinel' | 'archivist' | 'warden';
 
 export interface SourceInput {
   kind: SourceKind;
@@ -204,6 +254,26 @@ export const api = {
     return request<Anomaly[]>(`/api/anomalies?${q}`);
   },
   acknowledgeAnomaly: (id: string) => request<Anomaly>(`/api/anomalies/${id}/acknowledge`, { method: 'POST' }),
+  comments: (params: { category?: string; view?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.category) q.set('category', params.category);
+    q.set('view', params.view ?? 'unreviewed');
+    q.set('limit', String(params.limit ?? 100));
+    return request<QueuedComment[]>(`/api/comments?${q}`);
+  },
+  labelComment: (id: string, label: 'troll' | 'not_troll', note?: string) =>
+    request<unknown>(`/api/comments/${id}/label`, { method: 'POST', body: JSON.stringify({ label, note }) }),
+  replyDrafts: () => request<ReplyDraft[]>('/api/replies'),
+  approveReply: (id: string, text?: string) =>
+    request<{ id: string; status: string; text: string }>(`/api/replies/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(text ? { text } : {}),
+    }),
+  rejectReply: (id: string) => request<unknown>(`/api/replies/${id}/reject`, { method: 'POST' }),
+  youtubeStatus: () => request<YouTubeStatus>('/api/youtube/status'),
+  connectYouTube: (code: string, redirectUri: string) =>
+    request<unknown>('/api/youtube/connect', { method: 'POST', body: JSON.stringify({ code, redirectUri }) }),
+  disconnectYouTube: () => request<unknown>('/api/youtube/disconnect', { method: 'POST' }),
   sources: () => request<Source[]>('/api/sources'),
   createSource: (body: SourceInput) =>
     request<Source>('/api/sources', { method: 'POST', body: JSON.stringify(body) }),

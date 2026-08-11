@@ -7,7 +7,7 @@ import * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import type { ApexEnvConfig } from './config.js';
 
-const AGENTS = ['aria', 'atlas', 'sentinel', 'archivist'] as const;
+const AGENTS = ['aria', 'atlas', 'sentinel', 'archivist', 'warden'] as const;
 type AgentName = (typeof AGENTS)[number];
 
 /**
@@ -36,6 +36,9 @@ export class MessagingStack extends Stack {
       atlas: Duration.minutes(10),
       sentinel: Duration.minutes(30),
       archivist: Duration.minutes(15),
+      // Warden's unit of work is one live-chat page plus a triage batch; each
+      // comment costs a model round trip, so it needs more room than Aria.
+      warden: Duration.minutes(10),
     };
 
     this.queues = {} as Record<AgentName, sqs.Queue>;

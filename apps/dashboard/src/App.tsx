@@ -6,16 +6,18 @@ import {
 import { beginSignIn, can, completeSignIn, loadSession, readAuthConfig, signOut, type Session } from './auth.js';
 import { FleetPanel } from './components/FleetPanel.js';
 import { SourcesPanel } from './components/SourcesPanel.js';
+import { CommentQueue } from './components/CommentQueue.js';
 import { BeastControl } from './components/BeastControl.js';
 import { AnomalyFeed } from './components/AnomalyFeed.js';
 import { EvidenceVault } from './components/EvidenceVault.js';
 import { AuditLog } from './components/AuditLog.js';
 import { WorkflowCanvas } from './components/WorkflowCanvas.js';
 
-type View = 'fleet' | 'sources' | 'beast' | 'findings' | 'workflows' | 'evidence' | 'audit';
+type View = 'fleet' | 'comments' | 'sources' | 'beast' | 'findings' | 'workflows' | 'evidence' | 'audit';
 
 const VIEWS: Array<{ id: View; label: string; permission: string; blurb: string; title: string }> = [
   { id: 'fleet', label: 'Command deck', permission: 'agent:read', title: 'Command deck', blurb: 'Live state of every agent, its queue depth and how hard it is working.' },
+  { id: 'comments', label: 'Comments', permission: 'comment:read', title: 'Comment triage', blurb: 'Your live chat and comments, sorted worst-first. Judge them, and send the replies you approve.' },
   { id: 'sources', label: 'Sources', permission: 'source:read', title: 'Sources', blurb: 'What the fleet is watching. Agents only ever work from this list — if it is empty, nothing happens.' },
   { id: 'beast', label: 'Beast mode', permission: 'agent:read', title: 'Beast mode', blurb: 'Activate the whole fleet at once against every matching source, under a hard cost and time ceiling.' },
   { id: 'findings', label: 'Findings', permission: 'anomaly:read', title: 'Findings', blurb: 'Scored anomalies with the full signal breakdown behind every number.' },
@@ -162,6 +164,13 @@ export function App(): JSX.Element {
         )}
 
         {view === 'fleet' && <FleetPanel agents={agents} loading={loading} />}
+        {view === 'comments' && (
+          <CommentQueue
+            canLabel={can(roles, 'comment:label')}
+            canApprove={can(roles, 'reply:approve')}
+            canConnect={can(roles, 'credential:connect')}
+          />
+        )}
         {view === 'sources' && (
           <SourcesPanel canCreate={can(roles, 'source:create')} canUpdate={can(roles, 'source:update')} />
         )}

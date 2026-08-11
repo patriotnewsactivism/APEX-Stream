@@ -11,13 +11,23 @@ don't receive it directly.
 | **Atlas** | `services/agent-atlas` | Web pages (scraping/diffing) | `src/page.ts` |
 | **Sentinel** | `services/agent-sentinel` | Live streams | `src/stream.ts` |
 | **Archivist** | `services/agent-archivist` | Uploaded evidence, S3 vault | `src/vault.ts` |
+| **Warden** | `services/agent-warden` | YouTube live chat and comments | `src/index.ts` |
 
 These map directly to the `sources.kind` check constraint in
 `db/migrations/001_initial_schema.sql`: `rss`, `http_api`, `web_page`,
 `social`, `court_docket` route to Aria or Atlas depending on polling model;
-`live_stream` routes to Sentinel; `upload` routes to Archivist. Every source
-row has an `owner_agent` column constrained to exactly these four names — the
-schema and the runtime agree on the same fixed set by construction.
+`live_stream` routes to Sentinel; `upload` routes to Archivist;
+`youtube_live_chat` and `youtube_video` route to Warden. Every source row has an
+`owner_agent` column constrained to exactly these five names — the schema and
+the runtime agree on the same fixed set by construction.
+
+Warden is the odd one out in two ways, both deliberate. It reads a channel the
+operator *owns* rather than a third party's public surface, and its output is
+addressed to a human for a decision rather than filed as a finding. It is also
+the only agent whose subject matter could justify acting — and it cannot: it has
+no `reply:post` or `comment:moderate` scope, its database role can only create a
+`pending` draft, and the code that publishes a reply lives in the orchestrator
+behind a `reply:approve` check. See [`youtube.md`](youtube.md).
 
 ## Task lifecycle
 

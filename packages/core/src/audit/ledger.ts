@@ -42,7 +42,16 @@ export type AuditAction =
   | 'rbac.role_revoked'
   | 'rbac.denied'
   | 'config.changed'
-  | 'secret.rotated';
+  | 'secret.rotated'
+  // Community moderation. `reply.posted` is the only action in this list that
+  // publishes anything outside the system, so its ledger entry carries the
+  // exact text that was sent.
+  | 'comment.labelled'
+  | 'reply.posted'
+  | 'reply.post_failed'
+  | 'reply.rejected'
+  | 'credential.connected'
+  | 'credential.revoked';
 
 export interface AuditEntryInput {
   actor: ActorId | string;
