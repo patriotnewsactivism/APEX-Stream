@@ -54,16 +54,18 @@ export interface AgentHeartbeat {
 // Sources and observations
 // ---------------------------------------------------------------------------
 
-export type SourceKind =
-  | 'rss'
-  | 'http_api'
-  | 'web_page'
-  | 'social'
-  | 'court_docket'
-  | 'live_stream'
-  | 'upload'
-  | 'youtube_live_chat'
-  | 'youtube_video';
+export const SOURCE_KINDS = [
+  'rss',
+  'http_api',
+  'web_page',
+  'social',
+  'court_docket',
+  'live_stream',
+  'upload',
+  'youtube_live_chat',
+  'youtube_video',
+] as const;
+export type SourceKind = (typeof SOURCE_KINDS)[number];
 
 export interface MonitoredSource {
   id: string;

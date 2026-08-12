@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import {
+  AGENT_IDS,
   AGENT_REGISTRY,
   ROLE_DEFINITIONS,
+  SOURCE_KINDS,
   verifyChain,
   type AgentId,
   type Logger,
@@ -126,11 +128,11 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
 
   // ---- sources ------------------------------------------------------------
   const sourceBody = z.object({
-    kind: z.enum(['rss', 'http_api', 'web_page', 'social', 'court_docket', 'live_stream', 'upload']),
+    kind: z.enum(SOURCE_KINDS),
     label: z.string().min(1).max(200),
     url: z.string().url(),
     intervalSeconds: z.number().int().min(0).max(86_400).default(900),
-    ownerAgent: z.enum(['aria', 'atlas', 'sentinel', 'archivist']),
+    ownerAgent: z.enum(AGENT_IDS),
     tags: z.array(z.string()).default([]),
     authority: z.number().min(0).max(1).default(0.5),
     enabled: z.boolean().default(true),
