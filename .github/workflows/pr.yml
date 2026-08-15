@@ -50,9 +50,9 @@ jobs:
       - name: Synthesise infrastructure
         working-directory: infra
         env:
+          # No account or region: the stacks synthesise environment-agnostic,
+          # so this step needs no AWS credentials.
           APEX_ALERT_EMAIL: ci@example.com
-          CDK_DEFAULT_ACCOUNT: '000000000000'
-          CDK_DEFAULT_REGION: us-east-1
         run: |
           # NetworkStack's Vpc asks for the region's availability zones. That is a
           # context lookup, and on a stack with a concrete account CDK resolves it by

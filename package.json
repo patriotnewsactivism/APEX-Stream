@@ -2,7 +2,7 @@
   "name": "apex-stream",
   "version": "0.1.0",
   "private": true,
-  "description": "APEX Stream \u2014 cloud-native multi-agent monitoring, anomaly detection and evidence archival platform on AWS",
+  "description": "APEX Stream — cloud-native multi-agent monitoring, anomaly detection and evidence archival platform on AWS",
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
@@ -24,5 +24,8 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "qwen": "^0.0.0"
   }
 }

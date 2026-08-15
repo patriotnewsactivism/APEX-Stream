@@ -71,8 +71,14 @@ type AgentName = (typeof AGENTS)[number];
 export interface ComputeStackProps extends StackProps {
   config: ApexEnvConfig;
   vpc: ec2.Vpc;
+<<<<<<< Updated upstream
   database: DatabaseRef;
   databaseSecurityGroup: ec2.SecurityGroup;
+=======
+  database: rds.DatabaseCluster;
+  taskSecurityGroup: ec2.ISecurityGroup;
+  albSecurityGroup: ec2.ISecurityGroup;
+>>>>>>> Stashed changes
   evidenceBucket: s3.Bucket;
   memoryTable: dynamodb.Table;
   queues: Record<AgentName, sqs.Queue>;
@@ -101,7 +107,12 @@ export class ComputeStack extends Stack {
 
   constructor(scope: Construct, id: string, props: ComputeStackProps) {
     super(scope, id, props);
+<<<<<<< Updated upstream
     const { config, vpc, database, evidenceBucket, memoryTable, queues, eventBus, dataKey, evidenceKey, secretsKey } = props;
+=======
+    const { config, vpc, database, evidenceBucket, memoryTable, queues, eventBus, dataKey, evidenceKey } = props;
+    const taskSecurityGroup = props.taskSecurityGroup;
+>>>>>>> Stashed changes
 
     const cluster = new ecs.Cluster(this, 'Cluster', {
       clusterName: `apex-${config.envName}`,
@@ -147,6 +158,7 @@ export class ComputeStack extends Stack {
       );
     }
 
+<<<<<<< Updated upstream
     const taskSecurityGroup = new ec2.SecurityGroup(this, 'TaskSg', {
       vpc,
       description: 'APEX Stream application tasks',
@@ -170,13 +182,20 @@ export class ComputeStack extends Stack {
       description: 'application tasks to Aurora',
     });
 
+=======
+>>>>>>> Stashed changes
     const executionRole = new iam.Role(this, 'ExecutionRole', {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonECSTaskExecutionRolePolicy')],
       description: 'Pulls images and writes container logs',
     });
+<<<<<<< Updated upstream
     grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, executionRole);
     dataKey.grantDecrypt(executionRole);
+=======
+    if (database.secret) allowSecretRead(executionRole, database.secret.secretArn);
+    allowKeyUse(executionRole, dataKey.keyArn, 'decrypt');
+>>>>>>> Stashed changes
 
     const sharedEnvironment = {
       APEX_ENV: config.envName,
@@ -219,16 +238,31 @@ export class ComputeStack extends Stack {
       assumedBy: new iam.ServicePrincipal('ecs-tasks.amazonaws.com'),
       description: 'APEX orchestrator - dispatches work, reads state, never captures evidence',
     });
-    for (const queue of Object.values(queues)) queue.grantSendMessages(orchestratorRole);
-    for (const queue of Object.values(queues)) {
-      queue.grant(orchestratorRole, 'sqs:GetQueueAttributes');
-    }
+    orchestratorRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['sqs:SendMessage', 'sqs:GetQueueAttributes', 'sqs:GetQueueUrl'],
+        resources: Object.values(queues).map((q) => q.queueArn),
+      }),
+    );
     eventBus.grantPutEventsTo(orchestratorRole);
+<<<<<<< Updated upstream
     evidenceBucket.grantRead(orchestratorRole); // read for review; never write
     evidenceKey.grantDecrypt(orchestratorRole);
     grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, orchestratorRole);
     grantSecretReadWithoutCycle(youtubeOAuth, secretsKey.keyArn, orchestratorRole);
     dataKey.grantEncryptDecrypt(orchestratorRole);
+=======
+    // Read evidence for review; never write it. Archivist is the only writer.
+    orchestratorRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        actions: ['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket'],
+        resources: [evidenceBucket.bucketArn, evidenceBucket.arnForObjects('*')],
+      }),
+    );
+    allowKeyUse(orchestratorRole, evidenceKey.keyArn, 'decrypt');
+    allowKeyUse(orchestratorRole, dataKey.keyArn, 'encryptDecrypt');
+    if (database.secret) allowSecretRead(orchestratorRole, database.secret.secretArn);
+>>>>>>> Stashed changes
 
     const orchestratorTask = new ecs.FargateTaskDefinition(this, 'OrchestratorTask', {
       cpu: config.orchestrator.cpu,
@@ -296,6 +330,7 @@ export class ComputeStack extends Stack {
     this.loadBalancer = new elbv2.ApplicationLoadBalancer(this, 'Alb', {
       vpc,
       internetFacing: true,
+      securityGroup: props.albSecurityGroup,
       loadBalancerName: `apex-${config.envName}`,
       idleTimeout: Duration.seconds(120),
       dropInvalidHeaderFields: true,
@@ -303,7 +338,10 @@ export class ComputeStack extends Stack {
 
     const listener = this.loadBalancer.addListener('HttpListener', {
       port: 80,
-      open: true,
+      // Ingress is already declared on the security group in the network stack;
+      // letting the listener add it again would write a rule from this stack
+      // into that one.
+      open: false,
       // HTTPS termination is added in DEPLOY.md once a certificate exists;
       // CloudFront in front of this enforces TLS for browser traffic.
     });
@@ -349,6 +387,7 @@ export class ComputeStack extends Stack {
         description: `APEX ${agent} - scoped to its own queue and memory partition`,
       });
 
+<<<<<<< Updated upstream
       // Bedrock, IAM-only (no API key to manage or leak, since these tasks already run
       // under an IAM role). Warden uses this for comment classification and reply
       // drafting; the other three do not call an LLM yet, and keeping the grant uniform
@@ -370,6 +409,24 @@ export class ComputeStack extends Stack {
       grantSecretReadWithoutCycle(database.secret, secretsKey.keyArn, taskRole);
       if (agent === 'warden') grantSecretReadWithoutCycle(youtubeOAuth, secretsKey.keyArn, taskRole);
       dataKey.grantEncryptDecrypt(taskRole);
+=======
+      // Only this agent's queue — one ARN, no wildcards.
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          actions: [
+            'sqs:ReceiveMessage',
+            'sqs:DeleteMessage',
+            'sqs:ChangeMessageVisibility',
+            'sqs:GetQueueAttributes',
+            'sqs:GetQueueUrl',
+          ],
+          resources: [queue.queueArn],
+        }),
+      );
+      eventBus.grantPutEventsTo(taskRole);
+      if (database.secret) allowSecretRead(taskRole, database.secret.secretArn);
+      allowKeyUse(taskRole, dataKey.keyArn, 'encryptDecrypt');
+>>>>>>> Stashed changes
 
       /**
        * Memory isolation enforced in IAM, not just in code. The LeadingKeys
@@ -387,9 +444,16 @@ export class ComputeStack extends Stack {
       if (agent === 'archivist') {
         // Only Archivist writes evidence — and it may not delete or shorten
         // retention on anything it has written.
-        evidenceBucket.grantPut(taskRole);
-        evidenceBucket.grantRead(taskRole);
-        evidenceKey.grantEncryptDecrypt(taskRole);
+        taskRole.addToPrincipalPolicy(
+          new iam.PolicyStatement({
+            // PutObject carries the retention header at write time; the Deny
+            // below blocks PutObjectRetention, which is what would let an
+            // existing object's retention be shortened after the fact.
+            actions: ['s3:PutObject', 's3:GetObject', 's3:GetObjectVersion', 's3:ListBucket'],
+            resources: [evidenceBucket.bucketArn, evidenceBucket.arnForObjects('*')],
+          }),
+        );
+        allowKeyUse(taskRole, evidenceKey.keyArn, 'encryptDecrypt');
         taskRole.addToPolicy(
           new iam.PolicyStatement({
             effect: iam.Effect.DENY,
@@ -406,8 +470,13 @@ export class ComputeStack extends Stack {
       }
       if (agent === 'sentinel') {
         // Sentinel stages raw stream audio before Archivist takes custody.
-        evidenceBucket.grantPut(taskRole);
-        evidenceKey.grantEncryptDecrypt(taskRole);
+        taskRole.addToPrincipalPolicy(
+          new iam.PolicyStatement({
+            actions: ['s3:PutObject'],
+            resources: [evidenceBucket.arnForObjects('streams/*')],
+          }),
+        );
+        allowKeyUse(taskRole, evidenceKey.keyArn, 'encryptDecrypt');
         taskRole.addToPolicy(
           new iam.PolicyStatement({
             actions: ['transcribe:StartStreamTranscription'],
@@ -459,6 +528,12 @@ export class ComputeStack extends Stack {
         vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
         circuitBreaker: { rollback: true },
         enableExecuteCommand: config.envName !== 'prod',
+        // Agents consume a queue rather than serve traffic, so a deployment may
+        // take capacity to zero briefly - messages simply wait. Allowing that
+        // avoids paying for double capacity on every deploy, which the API
+        // service does need but these do not.
+        minHealthyPercent: 0,
+        maxHealthyPercent: 200,
         // Collectors are interruptible: Spot cuts their cost by roughly 70%,
         // and a reclaimed task simply returns its message to the queue.
         capacityProviderStrategies: config.useFargateSpot
@@ -511,6 +586,37 @@ export class ComputeStack extends Stack {
       new CfnOutput(this, `${cap(name)}RepoUri`, { value: repo.repositoryUri });
     }
   }
+}
+
+/**
+ * Cross-stack permissions are granted on the *identity* side only.
+ *
+ * `key.grantDecrypt(role)` and friends add a statement to the KMS key policy
+ * naming the role. When the key lives in an earlier stack than the role — as it
+ * does here — that embeds a forward reference and CDK refuses the resulting
+ * cycle. CDK's default key policy already delegates authorisation to IAM for
+ * principals in this account, so an identity policy is sufficient and keeps the
+ * stack graph acyclic.
+ */
+function allowKeyUse(role: iam.IRole, keyArn: string, mode: 'decrypt' | 'encryptDecrypt'): void {
+  role.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      actions:
+        mode === 'decrypt'
+          ? ['kms:Decrypt', 'kms:DescribeKey']
+          : ['kms:Decrypt', 'kms:Encrypt', 'kms:ReEncrypt*', 'kms:GenerateDataKey*', 'kms:DescribeKey'],
+      resources: [keyArn],
+    }),
+  );
+}
+
+function allowSecretRead(role: iam.IRole, secretArn: string): void {
+  role.addToPrincipalPolicy(
+    new iam.PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue', 'secretsmanager:DescribeSecret'],
+      resources: [secretArn, `${secretArn}-??????`],
+    }),
+  );
 }
 
 function cap(value: string): string {

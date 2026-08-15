@@ -140,15 +140,29 @@ export class BeastController {
       stats: { observations: 0, anomalies: 0, criticalAnomalies: 0, evidenceArchived: 0, notificationsSent: 0, failures: 0 },
     };
 
-    await this.db.query(
-      `INSERT INTO runs (id, mode, status, initiated_by, participating_agents, workflow_id,
-                         started_at, ended_at, expires_at, budget, stats)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [
-        run.id, run.mode, run.status, run.initiatedBy, JSON.stringify(run.participatingAgents), null,
-        run.startedAt, null, run.expiresAt, JSON.stringify(run.budget), JSON.stringify(run.stats),
-      ],
-    );
+    try {
+      await this.db.query(
+        `INSERT INTO runs (id, mode, status, initiated_by, participating_agents, workflow_id,
+                           started_at, ended_at, expires_at, budget, stats)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          run.id, run.mode, run.status, run.initiatedBy, JSON.stringify(run.participatingAgents), null,
+          run.startedAt, null, run.expiresAt, JSON.stringify(run.budget), JSON.stringify(run.stats),
+        ],
+      );
+    } catch (err) {
+      // A partial unique index enforces one active Beast run. The preflight
+      // check above catches the common case, but two operators reacting to the
+      // same event within the same second race past it - the database is the
+      // guard that actually holds, and this turns it into a clear answer
+      // instead of a 500.
+      if ((err as { code?: string }).code === '23505') {
+        throw new ValidationError(
+          'Another Beast run started moments ago. Only one may be active at a time - stop it before starting another.',
+        );
+      }
+      throw err;
+    }
 
     // Sweep tasks are dispatched per agent up to its computed concurrency. The
     // TTL is the remaining run window, so nothing outlives the run itself.

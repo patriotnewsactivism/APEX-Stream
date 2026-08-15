@@ -1,7 +1,11 @@
+<<<<<<< Updated upstream
 import pg from 'pg';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+=======
+>>>>>>> Stashed changes
 import type { AnomalyScoreResult, SignalObservation } from '@apex/core';
+import type { SqlExecutor } from './sql.js';
 
 // See services/orchestrator/src/db.ts's loadRdsCaBundle for the full
 // explanation -- same fix, same underlying bug, this package's own pg.Pool.
@@ -19,9 +23,10 @@ function loadRdsCaBundle(): string | undefined {
  *
  * Deliberately narrow: agents read the sources they own and write observations,
  * signals and anomalies. They cannot read evidence, other agents' rows, or the
- * audit log — the database role backing this pool is scoped to match.
+ * audit log - the database role backing the executor is scoped to match.
  */
 export class Store {
+<<<<<<< Updated upstream
   private readonly pool: pg.Pool;
 
   constructor(connectionString = process.env.DATABASE_URL) {
@@ -40,6 +45,9 @@ export class Store {
       application_name: `apex-${process.env.APEX_AGENT_ID ?? 'agent'}`,
     });
   }
+=======
+  constructor(private readonly db: SqlExecutor) {}
+>>>>>>> Stashed changes
 
   /**
    * Returns the sources this task is responsible for.
@@ -54,7 +62,7 @@ export class Store {
     shard: number;
     shardCount: number;
   }): Promise<Array<{ id: string; label: string; url: string; kind: string; authority: number; intervalSeconds: number }>> {
-    const rows = await this.pool.query<{
+    const rows = await this.db.query<{
       id: string; label: string; url: string; kind: string; authority: string; interval_seconds: number;
     }>(
       `SELECT id, label, url, kind, authority, interval_seconds
@@ -69,14 +77,14 @@ export class Store {
         LIMIT 200`,
       [input.ownerAgent, input.sourceId ?? null, input.tags, input.shard, Math.max(1, input.shardCount)],
     );
-    return rows.rows.map((r) => ({
+    return rows.map((r) => ({
       id: r.id, label: r.label, url: r.url, kind: r.kind,
       authority: Number(r.authority), intervalSeconds: r.interval_seconds,
     }));
   }
 
   async markPolled(sourceId: string, error: string | null): Promise<void> {
-    await this.pool.query(
+    await this.db.query(
       `UPDATE sources
           SET last_polled_at = now(),
               consecutive_failures = CASE WHEN $2::text IS NULL THEN 0 ELSE consecutive_failures + 1 END,
@@ -87,45 +95,46 @@ export class Store {
   }
 
   async observationExists(sourceId: string, contentHash: string): Promise<boolean> {
-    const res = await this.pool.query(
-      `SELECT 1 FROM observations WHERE source_id = $1 AND content_hash = $2 LIMIT 1`,
+    const rows = await this.db.query(
+      `SELECT 1 AS present FROM observations WHERE source_id = $1 AND content_hash = $2 LIMIT 1`,
       [sourceId, contentHash],
     );
-    return res.rowCount ? res.rowCount > 0 : false;
+    return rows.length > 0;
   }
 
   async recentFingerprints(sourceId: string, limit: number): Promise<string[]> {
-    const res = await this.pool.query<{ fingerprint: string }>(
+    const rows = await this.db.query<{ fingerprint: string }>(
       `SELECT fingerprint FROM observations
         WHERE source_id = $1 AND fingerprint IS NOT NULL
         ORDER BY collected_at DESC LIMIT $2`,
       [sourceId, limit],
     );
-    return res.rows.map((r) => r.fingerprint);
+    return rows.map((r) => r.fingerprint);
   }
 
   async latestFingerprint(sourceId: string, url: string): Promise<{ fingerprint: string; observationId: string } | null> {
-    const res = await this.pool.query<{ fingerprint: string; id: string }>(
+    const rows = await this.db.query<{ fingerprint: string; id: string }>(
       `SELECT fingerprint, id FROM observations
         WHERE source_id = $1 AND url = $2 AND fingerprint IS NOT NULL
         ORDER BY collected_at DESC LIMIT 1`,
       [sourceId, url],
     );
-    const row = res.rows[0];
+    const row = rows[0];
     return row ? { fingerprint: row.fingerprint, observationId: row.id } : null;
   }
 
   async itemsInLastHour(sourceId: string): Promise<number> {
-    const res = await this.pool.query<{ count: string }>(
-      `SELECT count(*)::text FROM observations WHERE source_id = $1 AND collected_at > now() - interval '1 hour'`,
+    const rows = await this.db.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM observations
+        WHERE source_id = $1 AND collected_at > now() - interval '1 hour'`,
       [sourceId],
     );
-    return Number(res.rows[0]?.count ?? '0');
+    return Number(rows[0]?.count ?? '0');
   }
 
   async watchlistTerms(): Promise<string[]> {
-    const res = await this.pool.query<{ term: string }>(`SELECT term FROM watchlist WHERE enabled = true`);
-    return res.rows.map((r) => r.term);
+    const rows = await this.db.query<{ term: string }>(`SELECT term FROM watchlist WHERE enabled = true`);
+    return rows.map((r) => r.term);
   }
 
   async saveObservation(input: {
@@ -140,10 +149,8 @@ export class Store {
     metadata: Record<string, unknown>;
     signals: SignalObservation[];
   }): Promise<string> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const res = await client.query<{ id: string }>(
+    return this.db.transaction(async (tx) => {
+      const inserted = await tx.query<{ id: string }>(
         `INSERT INTO observations
            (source_id, collected_by, collected_at, occurred_at, title, content, content_hash, fingerprint, url, metadata)
          VALUES ($1,$2,now(),$3,$4,$5,$6,$7,$8,$9)
@@ -154,26 +161,20 @@ export class Store {
           input.contentHash, input.fingerprint, input.url, JSON.stringify(input.metadata),
         ],
       );
-      const observationId = res.rows[0]?.id;
-      if (!observationId) {
-        await client.query('ROLLBACK');
-        return '';
-      }
+      const observationId = inserted[0]?.id;
+      // A conflict means another task already stored these exact bytes. That is
+      // normal under Beast mode sharding, not an error.
+      if (!observationId) return '';
+
       for (const signal of input.signals) {
-        await client.query(
+        await tx.query(
           `INSERT INTO observation_signals (observation_id, signal_id, raw, sample_size, evidence)
            VALUES ($1,$2,$3,$4,$5)`,
           [observationId, signal.signalId, signal.raw, signal.sampleSize, signal.evidence ?? null],
         );
       }
-      await client.query('COMMIT');
       return observationId;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+    });
   }
 
   async saveAnomaly(input: {
@@ -184,7 +185,7 @@ export class Store {
     result: AnomalyScoreResult;
     summary: string;
   }): Promise<string> {
-    const res = await this.pool.query<{ id: string }>(
+    const rows = await this.db.query<{ id: string }>(
       `INSERT INTO anomalies
          (run_id, observation_id, source_id, detected_by, detected_at, score, band, confidence,
           summary, scoring_profile_id, scoring_profile_version, components, input_hash, explanation)
@@ -197,12 +198,12 @@ export class Store {
         JSON.stringify(input.result.components), input.result.inputHash, input.result.explanation,
       ],
     );
-    return res.rows[0]?.id ?? '';
+    return rows[0]?.id ?? '';
   }
 
   /** Anomalies detected but never archived — Archivist's backstop sweep. */
   async pendingArchival(limit: number): Promise<Array<{ observationId: string; anomalyId: string | null }>> {
-    const res = await this.pool.query<{ observation_id: string; id: string }>(
+    const rows = await this.db.query<{ observation_id: string; id: string }>(
       `SELECT a.observation_id, a.id
          FROM anomalies a
     LEFT JOIN evidence e ON e.anomaly_id = a.id
@@ -211,7 +212,7 @@ export class Store {
         LIMIT $1`,
       [limit],
     );
-    return res.rows.map((r) => ({ observationId: r.observation_id, anomalyId: r.id }));
+    return rows.map((r) => ({ observationId: r.observation_id, anomalyId: r.id }));
   }
 
   async getObservation(id: string): Promise<{
@@ -219,12 +220,12 @@ export class Store {
     content: string; contentHash: string; collectedAt: string; collectedBy: string;
     metadata: Record<string, unknown>;
   } | null> {
-    const res = await this.pool.query<Record<string, unknown>>(
+    const rows = await this.db.query<Record<string, unknown>>(
       `SELECT id, source_id, url, title, content, content_hash, collected_at, collected_by, metadata
          FROM observations WHERE id = $1`,
       [id],
     );
-    const r = res.rows[0];
+    const r = rows[0];
     if (!r) return null;
     return {
       id: r.id as string,
@@ -245,7 +246,7 @@ export class Store {
     sha256: string; bytes: number; contentType: string; retainUntil: string;
     manifestSha256: string; chainOfCustody: unknown;
   }): Promise<void> {
-    await this.pool.query(
+    await this.db.query(
       `INSERT INTO evidence
          (id, anomaly_id, observation_id, captured_by, captured_at, s3_bucket, s3_key, s3_version_id,
           sha256, bytes, content_type, retain_until, manifest_sha256, chain_of_custody)
@@ -260,6 +261,6 @@ export class Store {
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    await this.db.close();
   }
 }

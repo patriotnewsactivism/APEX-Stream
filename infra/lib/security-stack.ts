@@ -6,10 +6,17 @@ import type { ApexEnvConfig } from './config.js';
 /**
  * Encryption keys.
  *
- * Three separate customer-managed keys rather than one. Separation means the
- * evidence key can carry a stricter policy than the general data key, and a
- * compromised service role cannot decrypt everything just because it could
- * decrypt something. All three rotate annually.
+ * Two customer-managed keys rather than one. Separation means the evidence key
+ * can carry a stricter policy than the general data key, and a compromised
+ * service role cannot decrypt everything just because it could decrypt
+ * something. Both rotate annually.
+ *
+ * Consumers are granted use of these keys through *identity* policies on their
+ * own roles, never by adding statements to the key policy. Writing a consumer's
+ * role ARN into a key policy would make this stack depend on the stack that
+ * defines the role, and since that stack already depends on this one, CDK
+ * rejects the cycle. Identity-based grants work because CDK's default key
+ * policy already delegates to IAM for principals in the same account.
  *
  * The evidence key is intentionally the strictest: it never gets a deletion
  * window shorter than 30 days, and in production it cannot be deleted at all
@@ -19,7 +26,6 @@ import type { ApexEnvConfig } from './config.js';
 export class SecurityStack extends Stack {
   readonly dataKey: kms.Key;
   readonly evidenceKey: kms.Key;
-  readonly secretsKey: kms.Key;
 
   constructor(scope: Construct, id: string, props: StackProps & { config: ApexEnvConfig }) {
     super(scope, id, props);
@@ -44,6 +50,7 @@ export class SecurityStack extends Stack {
       pendingWindow: Duration.days(30),
     });
 
+<<<<<<< Updated upstream
     this.secretsKey = new kms.Key(this, 'SecretsKey', {
       alias: `apex-${config.envName}-secrets`,
       description: 'APEX Stream - database credentials and API tokens',
@@ -52,5 +59,7 @@ export class SecurityStack extends Stack {
       removalPolicy,
       pendingWindow: Duration.days(config.removalProtection ? 30 : 7),
     });
+=======
+>>>>>>> Stashed changes
   }
 }

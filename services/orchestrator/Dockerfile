@@ -35,6 +35,9 @@ COPY --from=build --chown=apex:apex /repo/packages ./packages
 COPY --from=build --chown=apex:apex /repo/services/orchestrator ./services/orchestrator
 COPY --from=build --chown=apex:apex /repo/db ./db
 COPY --from=build --chown=apex:apex /repo/package.json ./package.json
+# The migration runner reads these at runtime; without them the migrate task
+# starts, finds no files, and reports success having done nothing.
+COPY --chown=apex:apex db/migrations ./db/migrations
 
 USER apex
 EXPOSE 8080

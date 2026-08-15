@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -20,7 +21,11 @@ import type { BeastController } from '../beast.js';
 import type { AuditWriter, Database } from '../db.js';
 import type { Dispatcher } from '../dispatcher.js';
 import { buildEffects } from '../effects.js';
+<<<<<<< Updated upstream
 import { registerCommentRoutes } from './comments.js';
+=======
+import { SentinelLauncher, readSentinelConfig } from '../sentinel.js';
+>>>>>>> Stashed changes
 import type { Config } from '../config.js';
 
 export interface RouteDeps {
@@ -36,6 +41,11 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
   const { config, db, audit, dispatcher, beast, log } = deps;
   const guard = (permission: string) => requirePermission(permission, audit);
 
+  // Present only in the lean profile, where Sentinel is launched per watch
+  // rather than run as a standing service.
+  const sentinelConfig = readSentinelConfig();
+  const sentinel = sentinelConfig ? new SentinelLauncher(sentinelConfig, log) : null;
+
   // ---- health -------------------------------------------------------------
   app.get('/health', async (_req, reply) => {
     const dbOk = await db.healthy();
@@ -45,6 +55,23 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
       version: process.env.APEX_VERSION ?? 'dev',
       env: config.APEX_ENV,
     });
+  });
+
+  /**
+   * Ends Beast runs whose wall-clock window has closed.
+   *
+   * The container profile does this on a timer inside a long-lived process.
+   * Under Lambda there is no such process, so an EventBridge schedule invokes
+   * this instead. It is reachable only from inside the account - the header is
+   * a guard against accidental external calls, not an authentication mechanism,
+   * since the route does nothing an attacker would want and reveals nothing.
+   */
+  app.post('/internal/expire-runs', async (request, reply) => {
+    if (request.headers['x-apex-internal'] !== 'schedule') {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    const expired = await beast.expireOverdueRuns();
+    return reply.send({ expired: expired.length, runIds: expired });
   });
 
   // ---- identity -----------------------------------------------------------
@@ -111,6 +138,51 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
 
   app.get('/api/beast/active', { preHandler: guard('run:read') }, async () => ({
     run: await beast.activeRun(),
+  }));
+
+  // ---- stream watches -----------------------------------------------------
+  app.post('/api/watches', { preHandler: guard('agent:start') }, async (request, reply) => {
+    if (!sentinel) {
+      return reply.code(409).send({
+        error: 'not_applicable',
+        message: 'This deployment runs Sentinel as a standing service; watches start by enabling a live_stream source.',
+      });
+    }
+    const body = z
+      .object({
+        sourceId: z.string().uuid(),
+        watchMinutes: z.number().int().min(1).max(480).default(60),
+        segmentSeconds: z.number().int().min(10).max(300).default(30),
+      })
+      .parse(request.body ?? {});
+
+    const runId = randomUUID();
+    const result = await sentinel.launch({ ...body, runId });
+    if (!result.taskArn) return reply.code(409).send({ error: 'launch_refused', message: result.reason });
+
+    await audit.append({
+      actor: request.principal?.username ?? 'unknown',
+      actorType: 'human',
+      action: 'agent.dispatched',
+      resourceType: 'watch',
+      resourceId: result.taskArn,
+      detail: { sourceId: body.sourceId, watchMinutes: body.watchMinutes, runId },
+      traceId: request.id,
+      outcome: 'allowed',
+    });
+    return reply.code(201).send({ runId, taskArn: result.taskArn, ...body });
+  });
+
+  app.delete('/api/watches/:taskArn', { preHandler: guard('agent:stop') }, async (request, reply) => {
+    if (!sentinel) return reply.code(409).send({ error: 'not_applicable' });
+    const { taskArn } = z.object({ taskArn: z.string().min(1) }).parse(request.params);
+    await sentinel.stop(decodeURIComponent(taskArn), `stopped by ${request.principal?.username ?? 'operator'}`);
+    return reply.send({ stopped: true });
+  });
+
+  app.get('/api/watches', { preHandler: guard('agent:read') }, async () => ({
+    supported: Boolean(sentinel),
+    running: sentinel ? await sentinel.runningCount() : 0,
   }));
 
   // ---- runs ---------------------------------------------------------------

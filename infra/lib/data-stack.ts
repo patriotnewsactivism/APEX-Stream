@@ -69,7 +69,6 @@ export class DataStack extends Stack {
   readonly database: DatabaseRef;
   readonly evidenceBucket: s3.Bucket;
   readonly memoryTable: dynamodb.Table;
-  readonly databaseSecurityGroup: ec2.SecurityGroup;
 
   constructor(
     scope: Construct,
@@ -77,17 +76,18 @@ export class DataStack extends Stack {
     props: StackProps & {
       config: ApexEnvConfig;
       vpc: ec2.Vpc;
+      databaseSecurityGroup: ec2.ISecurityGroup;
       dataKey: kms.Key;
       evidenceKey: kms.Key;
-      secretsKey: kms.Key;
     },
   ) {
     super(scope, id, props);
-    const { config, vpc, dataKey, evidenceKey, secretsKey } = props;
+    const { config, vpc, databaseSecurityGroup, dataKey, evidenceKey } = props;
 
     // ---------------------------------------------------------------------
     // Aurora PostgreSQL Serverless v2
     // ---------------------------------------------------------------------
+<<<<<<< Updated upstream
     this.databaseSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSg', {
       vpc,
       description: 'APEX Stream database - ingress only from application tasks',
@@ -97,6 +97,52 @@ export class DataStack extends Stack {
     const sharedCredentials = rds.Credentials.fromGeneratedSecret('apex_admin', {
       secretName: `apex/${config.envName}/database`,
       encryptionKey: secretsKey,
+=======
+    this.database = new rds.DatabaseCluster(this, 'Database', {
+      engine: rds.DatabaseClusterEngine.auroraPostgres({ version: rds.AuroraPostgresEngineVersion.VER_16_4 }),
+      vpc,
+      // Isolated subnets: the database has no route to the internet at all.
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+      securityGroups: [databaseSecurityGroup],
+      // Serverless v2 bills per ACU-second, so an idle environment costs the
+      // floor rather than a provisioned instance running around the clock.
+      // A floor of 0 lets the cluster pause entirely when nothing is querying
+      // it. The first query afterwards waits ~10-20s for it to resume, which is
+      // acceptable for an operator console and not for a public API.
+      serverlessV2MinCapacity: config.auroraMinAcu,
+      // The Data API is what lets Lambda reach Aurora over HTTPS with no VPC
+      // attachment - the single change that makes the lean profile possible.
+      enableDataApi: config.enableDataApi,
+      serverlessV2MaxCapacity: config.auroraMaxAcu,
+      writer: rds.ClusterInstance.serverlessV2('Writer', { enablePerformanceInsights: true }),
+      readers: config.auroraMultiAz
+        ? [rds.ClusterInstance.serverlessV2('Reader', { scaleWithWriter: true, enablePerformanceInsights: true })]
+        : [],
+      defaultDatabaseName: 'apex',
+      // Deliberately the AWS-managed Secrets Manager key rather than a
+      // customer-managed one. ECS auto-grants the execution role read access to
+      // this secret, and with a CMK that grant would write the role ARN into
+      // the key policy — creating a stack dependency cycle. The AWS-managed key
+      // still encrypts the secret at rest; what is given up is independent key
+      // rotation control over the credential, which the database's own rotation
+      // already covers.
+      credentials: rds.Credentials.fromGeneratedSecret('apex_admin', {
+        secretName: `apex/${config.envName}/database`,
+      }),
+      storageEncrypted: true,
+      storageEncryptionKey: dataKey,
+      backup: { retention: Duration.days(config.auroraBackupRetentionDays), preferredWindow: '03:00-04:00' },
+      cloudwatchLogsExports: ['postgresql'],
+      monitoringInterval: Duration.seconds(60),
+      deletionProtection: config.removalProtection,
+      removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.SNAPSHOT,
+      parameters: {
+        // Log anything slower than a second — enough to catch pathological
+        // queries without logging every request at volume.
+        log_min_duration_statement: '1000',
+        'rds.force_ssl': '1',
+      },
+>>>>>>> Stashed changes
     });
     const sharedParameters = {
       // Log anything slower than a second — enough to catch pathological

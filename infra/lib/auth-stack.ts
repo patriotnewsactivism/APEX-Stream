@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, Token, type StackProps } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type { Construct } from 'constructs';
 import type { ApexEnvConfig } from './config.js';
@@ -40,7 +40,13 @@ export class AuthStack extends Stack {
       mfa: cognito.Mfa.REQUIRED,
       mfaSecondFactor: { sms: false, otp: true },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      advancedSecurityMode: cognito.AdvancedSecurityMode.ENFORCED,
+      // Threat protection blocks sign-ins using credentials known to be
+      // breached, and flags impossible-travel and new-device risk. It needs the
+      // Plus feature plan — roughly $0.05 per monthly active user, which for a
+      // console with a handful of operators is about a dollar a month and
+      // comfortably worth it for what it prevents.
+      featurePlan: cognito.FeaturePlan.PLUS,
+      standardThreatProtectionMode: cognito.StandardThreatProtectionMode.FULL_FUNCTION,
       removalPolicy: config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY,
       deletionProtection: config.removalProtection,
     });
@@ -81,8 +87,13 @@ export class AuthStack extends Stack {
       enableTokenRevocation: true,
     });
 
+    // Cognito domain prefixes are globally unique, so the account id keeps this
+    // from colliding with anyone else's deployment. During an environment-
+    // agnostic synth the account is an unresolved token and cannot be sliced,
+    // so CI falls back to a placeholder it never actually deploys.
+    const domainSuffix = Token.isUnresolved(this.account) ? 'ci' : this.account.slice(-6);
     this.userPoolDomain = this.userPool.addDomain('HostedDomain', {
-      cognitoDomain: { domainPrefix: `apex-${config.envName}-${this.account.slice(-6)}` },
+      cognitoDomain: { domainPrefix: `apex-${config.envName}-${domainSuffix}` },
     });
 
     new CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });

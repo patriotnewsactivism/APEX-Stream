@@ -153,21 +153,43 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
   }
 
   private async process(received: ReceivedTask): Promise<void> {
-    const task = received.task as AgentTask<TPayload>;
+    const outcome = await this.runTask(received.task as AgentTask<TPayload>, received.approximateReceiveCount, {
+      ack: () => this.queue.ack(received.receiptHandle),
+      nack: (attempt) => this.queue.nack(received.receiptHandle, attempt),
+      keepAlive: () => this.queue.heartbeat(received.receiptHandle),
+    });
+    if (outcome === 'succeeded') this.lastTaskAt = new Date().toISOString();
+  }
+
+  /**
+   * Runs exactly one task.
+   *
+   * The polling loop and the Lambda handler both come through here, so retry
+   * classification, expiry, lease renewal and result reporting behave
+   * identically no matter which way the agent is deployed. The lease operations
+   * are injected because SQS receipt handling differs between the two: a
+   * container acks explicitly, while Lambda acks by returning without listing
+   * the message as a failure.
+   */
+  async runTask(
+    task: AgentTask<TPayload>,
+    receiveCount: number,
+    lease: { ack: () => Promise<void>; nack: (attempt: number) => Promise<void>; keepAlive: () => Promise<void> },
+  ): Promise<'succeeded' | 'failed' | 'expired' | 'retry'> {
     const log = this.log.child({ taskId: task.taskId, runId: task.runId, traceId: task.traceId, kind: task.kind });
     const startedAt = Date.now();
 
     if (task.targetAgent !== this.descriptor.id) {
       log.warn('task addressed to another agent, returning to queue', { targetAgent: task.targetAgent });
-      await this.queue.nack(received.receiptHandle, 1);
-      return;
+      await lease.nack(1);
+      return 'retry';
     }
 
     if (isExpired(task)) {
       log.warn('task expired before pickup, dropping', { expiresAt: task.expiresAt });
-      await this.queue.ack(received.receiptHandle);
+      await lease.ack();
       await this.report(buildResult(task, this.descriptor.id, startedAt, 'expired', this.descriptor.costPerTaskMinuteUsd));
-      return;
+      return 'expired';
     }
 
     const ctx: AgentContext = {
@@ -175,16 +197,16 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
       events: this.events,
       log,
       descriptor: this.descriptor,
-      keepAlive: () => this.queue.heartbeat(received.receiptHandle),
+      keepAlive: lease.keepAlive,
     };
 
     try {
       const output = await this.handle(task, ctx);
-      this.lastTaskAt = new Date().toISOString();
-      await this.queue.ack(received.receiptHandle);
+      await lease.ack();
       const result = buildResult(task, this.descriptor.id, startedAt, 'succeeded', this.descriptor.costPerTaskMinuteUsd, output);
       await this.report(result);
       log.info('task succeeded', { durationMs: result.durationMs, costUsd: result.estimatedCostUsd });
+      return 'succeeded';
     } catch (err) {
       const retryable = isRetryable(err);
       const error = {
@@ -193,17 +215,18 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
         retryable,
       };
 
-      if (retryable && received.approximateReceiveCount < task.maxAttempts) {
-        log.warn('task failed, returning for retry', { ...error, attempt: received.approximateReceiveCount });
-        await this.queue.nack(received.receiptHandle, received.approximateReceiveCount);
-        return;
+      if (retryable && receiveCount < task.maxAttempts) {
+        log.warn('task failed, returning for retry', { ...error, attempt: receiveCount });
+        await lease.nack(receiveCount);
+        return 'retry';
       }
 
       // Terminal: ack so it does not churn, and record why.
-      await this.queue.ack(received.receiptHandle);
+      await lease.ack();
       const result = buildResult(task, this.descriptor.id, startedAt, 'failed', this.descriptor.costPerTaskMinuteUsd, undefined, error);
       await this.report(result);
-      log.error('task failed permanently', { ...error, attempts: received.approximateReceiveCount });
+      log.error('task failed permanently', { ...error, attempts: receiveCount });
+      return 'failed';
     }
   }
 

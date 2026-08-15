@@ -1,7 +1,10 @@
-import pg from 'pg';
 import { GENESIS_HASH, sealEntry, type AuditEntry, type AuditEntryInput } from '@apex/core';
+<<<<<<< Updated upstream
 import type { Config } from './config.js';
 import { loadRdsCaBundle } from './rds-ca.js';
+=======
+import type { SqlExecutor } from '@apex/agent-runtime';
+>>>>>>> Stashed changes
 
 /**
  * Postgres access.
@@ -11,9 +14,15 @@ import { loadRdsCaBundle } from './rds-ca.js';
  * to the reader endpoint. Statements carry a timeout so a pathological query
  * cannot pin a connection indefinitely.
  */
+/**
+ * Thin convenience layer over whichever SqlExecutor this deployment uses —
+ * a Postgres pool in containers, the RDS Data API under Lambda. Every query in
+ * this service is written once and runs unchanged on both.
+ */
 export class Database {
-  private readonly pool: pg.Pool;
+  constructor(private readonly executor: SqlExecutor) {}
 
+<<<<<<< Updated upstream
   constructor(config: Config) {
     this.pool = new pg.Pool({
       connectionString: config.DATABASE_URL,
@@ -29,50 +38,27 @@ export class Database {
         : undefined,
       application_name: 'apex-orchestrator',
     });
+=======
+  async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
+    return this.executor.query<T>(text, params);
+>>>>>>> Stashed changes
   }
 
-  async query<T extends pg.QueryResultRow = pg.QueryResultRow>(
-    text: string,
-    params: unknown[] = [],
-  ): Promise<T[]> {
-    const res = await this.pool.query<T>(text, params as never[]);
-    return res.rows;
-  }
-
-  async one<T extends pg.QueryResultRow = pg.QueryResultRow>(
-    text: string,
-    params: unknown[] = [],
-  ): Promise<T | null> {
+  async one<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
     const rows = await this.query<T>(text, params);
     return rows[0] ?? null;
   }
 
-  async transaction<T>(fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await fn(client);
-      await client.query('COMMIT');
-      return result;
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+  async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>): Promise<T> {
+    return this.executor.transaction(fn);
   }
 
   async healthy(): Promise<boolean> {
-    try {
-      await this.pool.query('SELECT 1');
-      return true;
-    } catch {
-      return false;
-    }
+    return this.executor.healthy();
   }
 
   async close(): Promise<void> {
-    await this.pool.end();
+    await this.executor.close();
   }
 }
 
@@ -88,17 +74,20 @@ export class AuditWriter {
   constructor(private readonly db: Database) {}
 
   async append(input: AuditEntryInput): Promise<AuditEntry> {
-    return this.db.transaction(async (client) => {
-      await client.query('SELECT pg_advisory_xact_lock($1)', [847_211]);
-      const head = await client.query<{ sequence: string; entry_hash: string }>(
+    return this.db.transaction(async (tx) => {
+      // Serialises writers so two entries cannot claim the same predecessor and
+      // silently fork the chain — which would fail verification later for
+      // reasons that have nothing to do with tampering.
+      await tx.query('SELECT pg_advisory_xact_lock($1)', [847_211]);
+      const head = await tx.query<{ sequence: string; entry_hash: string }>(
         'SELECT sequence, entry_hash FROM audit_log ORDER BY sequence DESC LIMIT 1',
       );
-      const prev = head.rows[0];
+      const prev = head[0];
       const sequence = prev ? Number(prev.sequence) + 1 : 0;
       const prevHash = prev ? prev.entry_hash : GENESIS_HASH;
       const entry = sealEntry(input, sequence, prevHash);
 
-      await client.query(
+      await tx.query(
         `INSERT INTO audit_log
            (sequence, recorded_at, actor, actor_type, action, resource_type, resource_id,
             detail, ip_address, user_agent, trace_id, outcome, prev_hash, entry_hash)

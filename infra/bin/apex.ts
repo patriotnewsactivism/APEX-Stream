@@ -7,6 +7,7 @@ import { DataStack } from '../lib/data-stack.js';
 import { MessagingStack } from '../lib/messaging-stack.js';
 import { AuthStack } from '../lib/auth-stack.js';
 import { ComputeStack } from '../lib/compute-stack.js';
+import { LeanComputeStack } from '../lib/lean-compute-stack.js';
 import { FrontendStack } from '../lib/frontend-stack.js';
 import { ObservabilityStack } from '../lib/observability-stack.js';
 
@@ -19,18 +20,23 @@ const dashboardDomain = app.node.tryGetContext('dashboardDomain') ?? process.env
 const dashboardCertificateArn =
   app.node.tryGetContext('dashboardCertificateArn') ?? process.env.APEX_DASHBOARD_CERT_ARN ?? undefined;
 
-if (!['dev', 'staging', 'prod'].includes(envName)) {
-  throw new Error(`unknown environment "${envName}" — expected dev, staging or prod`);
+if (!['lean', 'dev', 'staging', 'prod'].includes(envName)) {
+  throw new Error(`unknown environment "${envName}" - expected lean, dev, staging or prod`);
 }
 if (!alertEmail) {
   throw new Error('alertEmail is required: pass -c alertEmail=you@example.com or set APEX_ALERT_EMAIL');
 }
 
 const config = envConfig(envName, alertEmail);
-const env = {
-  account: process.env.CDK_DEFAULT_ACCOUNT ?? process.env.AWS_ACCOUNT_ID,
-  region: process.env.CDK_DEFAULT_REGION ?? process.env.AWS_REGION ?? 'us-east-1',
-};
+/**
+ * When both account and region are known the stacks are environment-specific,
+ * which lets CDK resolve real availability zones. With either missing they are
+ * environment-agnostic and synthesise offline using `Fn::GetAZs` — that is what
+ * makes `cdk synth` work in CI without any AWS credentials at all.
+ */
+const account = process.env.CDK_DEFAULT_ACCOUNT ?? process.env.AWS_ACCOUNT_ID;
+const region = process.env.CDK_DEFAULT_REGION ?? process.env.AWS_REGION;
+const env = account && region ? { account, region } : undefined;
 const prefix = `Apex-${envName}`;
 
 // Stacks are split by lifecycle, not by convenience. Network and security
@@ -44,9 +50,9 @@ const data = new DataStack(app, `${prefix}-Data`, {
   env,
   config,
   vpc: network.vpc,
+  databaseSecurityGroup: network.databaseSecurityGroup,
   dataKey: security.dataKey,
   evidenceKey: security.evidenceKey,
-  secretsKey: security.secretsKey,
 });
 
 const messaging = new MessagingStack(app, `${prefix}-Messaging`, {
@@ -57,6 +63,7 @@ const messaging = new MessagingStack(app, `${prefix}-Messaging`, {
 
 const auth = new AuthStack(app, `${prefix}-Auth`, { env, config });
 
+<<<<<<< Updated upstream
 const compute = new ComputeStack(app, `${prefix}-Compute`, {
   env,
   config,
@@ -74,30 +81,80 @@ const compute = new ComputeStack(app, `${prefix}-Compute`, {
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   dashboardOrigin,
 });
+=======
+/**
+ * The compute tier is the only thing that differs between profiles. `lean`
+ * runs the API and three agents on Lambda with no VPC attachment and launches
+ * Sentinel on demand; `dev`, `staging` and `prod` run everything as long-lived
+ * Fargate services behind a load balancer. Every other stack is identical.
+ */
+const compute =
+  config.compute === 'serverless'
+    ? new LeanComputeStack(app, `${prefix}-Compute`, {
+        env,
+        config,
+        vpc: network.vpc,
+        database: data.database,
+        evidenceBucket: data.evidenceBucket,
+        memoryTable: data.memoryTable,
+        queues: messaging.queues,
+        eventBus: messaging.eventBus,
+        dataKey: security.dataKey,
+        evidenceKey: security.evidenceKey,
+        userPoolId: auth.userPool.userPoolId,
+        userPoolClientId: auth.userPoolClient.userPoolClientId,
+      })
+    : new ComputeStack(app, `${prefix}-Compute`, {
+        env,
+        config,
+        vpc: network.vpc,
+        database: data.database,
+        taskSecurityGroup: network.taskSecurityGroup,
+        albSecurityGroup: network.albSecurityGroup,
+        evidenceBucket: data.evidenceBucket,
+        memoryTable: data.memoryTable,
+        queues: messaging.queues,
+        eventBus: messaging.eventBus,
+        dataKey: security.dataKey,
+        evidenceKey: security.evidenceKey,
+        userPoolId: auth.userPool.userPoolId,
+        userPoolClientId: auth.userPoolClient.userPoolClientId,
+        dashboardOrigin,
+      });
+>>>>>>> Stashed changes
 
 const frontend = new FrontendStack(app, `${prefix}-Frontend`, {
   env,
   config,
+<<<<<<< Updated upstream
   loadBalancer: compute.loadBalancer,
   userPoolId: auth.userPool.userPoolId,
   userPoolClientId: auth.userPoolClient.userPoolClientId,
   hostedUiDomain: auth.userPoolDomain.baseUrl(),
   domainName: dashboardDomain || undefined,
   certificateArn: dashboardCertificateArn || undefined,
+=======
+  ...(compute instanceof LeanComputeStack
+    ? { apiOriginDomain: compute.functionUrlDomain }
+    : { loadBalancer: compute.loadBalancer }),
+>>>>>>> Stashed changes
 });
 
+// Alarms that depend on a load balancer only make sense for container
+// profiles; the lean profile gets queue, database and spend alarms only.
 new ObservabilityStack(app, `${prefix}-Observability`, {
   env,
   config,
   alertTopic: messaging.alertTopic,
-  loadBalancer: compute.loadBalancer,
+  loadBalancer: compute instanceof LeanComputeStack ? undefined : compute.loadBalancer,
   database: data.database,
   queues: messaging.queues,
   deadLetterQueues: messaging.deadLetterQueues,
-  services: compute.services,
+  services: compute instanceof LeanComputeStack ? {} : compute.services,
 });
 
 // Explicit dependencies so `cdk deploy --all` orders itself correctly.
+<<<<<<< Updated upstream
 data.addDependency(network);
 data.addDependency(security);
 compute.addDependency(data);
@@ -105,6 +162,15 @@ compute.addDependency(messaging);
 compute.addDependency(auth);
 frontend.addDependency(compute);
 frontend.addDependency(auth);
+=======
+data.addStackDependency(network);
+data.addStackDependency(security);
+compute.addStackDependency(network);
+compute.addStackDependency(data);
+compute.addStackDependency(messaging);
+compute.addStackDependency(auth);
+frontend.addStackDependency(compute);
+>>>>>>> Stashed changes
 
 // Tags drive cost allocation — the budget filter in ObservabilityStack keys
 // off Project, so every resource must carry it.

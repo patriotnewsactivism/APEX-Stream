@@ -5,10 +5,22 @@
  * `prod` is tuned for availability. The differences are concentrated here so
  * the stacks read identically and nobody has to grep for `if (prod)`.
  */
-export type EnvName = 'dev' | 'staging' | 'prod';
+export type EnvName = 'lean' | 'dev' | 'staging' | 'prod';
 
 export interface ApexEnvConfig {
   envName: EnvName;
+  /**
+   * `serverless` runs the orchestrator and the three text/web agents on Lambda
+   * with no VPC attachment, reaching Aurora through the Data API. That removes
+   * the NAT gateway, the interface endpoints, the load balancer and every
+   * always-on task - roughly $170/month of fixed cost. Sentinel still needs a
+   * container because a stream watch outlives Lambda's 15-minute ceiling.
+   */
+  compute: 'containers' | 'serverless';
+  /** Required by `serverless`: lets Lambda query Aurora over HTTPS. */
+  enableDataApi: boolean;
+  /** Interface endpoints cost ~$7/month each and are pointless without a VPC. */
+  interfaceEndpoints: boolean;
   /** Two NAT gateways cost ~$65/month; one is a single AZ dependency. */
   natGateways: number;
   /** Aurora Serverless v2 floor. 0 lets the cluster pause when truly idle. */
@@ -73,9 +85,54 @@ export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {
     alertEmail,
   };
 
+  /**
+   * The lean profile. Everything that bills by the hour whether or not it is
+   * doing anything has been removed:
+   *
+   *   no NAT gateway ........ -$32/mo   (nothing runs inside the VPC)
+   *   no VPC endpoints ...... -$51/mo   (same reason)
+   *   no load balancer ...... -$17/mo   (Lambda Function URL behind CloudFront)
+   *   no idle Fargate ....... -$28/mo   (Lambda scales to zero)
+   *   Aurora floor at 0 ACU . -$43/mo   (auto-pause when genuinely idle)
+   *
+   * What it costs instead: about 10-20 seconds on the first query after the
+   * database has been asleep, a cold start of roughly a second on the API, and
+   * a 15-minute ceiling on any single agent invocation.
+   */
+  if (envName === 'lean') {
+    return {
+      ...base,
+      compute: 'serverless',
+      enableDataApi: true,
+      interfaceEndpoints: false,
+      natGateways: 0,
+      auroraMinAcu: 0,
+      auroraMaxAcu: 2,
+      auroraMultiAz: false,
+      auroraBackupRetentionDays: 7,
+      useFargateSpot: true,
+      orchestrator: { cpu: 512, memoryMiB: 1024, minCount: 0, maxCount: 0 },
+      agents: {
+        aria: { cpu: 0, memoryMiB: 1024, minCount: 0, maxCount: 10 },
+        atlas: { cpu: 0, memoryMiB: 1536, minCount: 0, maxCount: 10 },
+        // Sentinel is the one container. It never runs on a schedule; the
+        // orchestrator launches it when an operator starts a watch, and it
+        // stops itself when the watch window closes.
+        sentinel: { cpu: 1024, memoryMiB: 2048, minCount: 0, maxCount: 2 },
+        archivist: { cpu: 0, memoryMiB: 1024, minCount: 0, maxCount: 10 },
+      },
+      logRetentionDays: 14,
+      monthlyBudgetUsd: 25,
+      removalProtection: false,
+    };
+  }
+
   if (envName === 'prod') {
     return {
       ...base,
+      compute: 'containers',
+      enableDataApi: false,
+      interfaceEndpoints: true,
       natGateways: 2,
       auroraMinAcu: 0.5,
       auroraMaxAcu: 16,
@@ -93,6 +150,9 @@ export function envConfig(envName: EnvName, alertEmail: string): ApexEnvConfig {
 
   return {
     ...base,
+    compute: 'containers',
+    enableDataApi: false,
+    interfaceEndpoints: true,
     natGateways: 1,
     auroraMinAcu: 0.5,
     auroraMaxAcu: 4,

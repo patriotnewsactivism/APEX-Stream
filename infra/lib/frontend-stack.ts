@@ -26,6 +26,7 @@ export class FrontendStack extends Stack {
     id: string,
     props: StackProps & {
       config: ApexEnvConfig;
+<<<<<<< Updated upstream
       loadBalancer: elbv2.ApplicationLoadBalancer;
       userPoolId: string;
       userPoolClientId: string;
@@ -43,6 +44,19 @@ export class FrontendStack extends Stack {
   ) {
     super(scope, id, props);
     const { config, loadBalancer, userPoolId, userPoolClientId, hostedUiDomain, domainName, certificateArn } = props;
+=======
+      /** Container profiles put the API behind a load balancer... */
+      loadBalancer?: elbv2.ApplicationLoadBalancer;
+      /** ...the lean profile puts it behind a Lambda Function URL. */
+      apiOriginDomain?: string;
+    },
+  ) {
+    super(scope, id, props);
+    const { config, loadBalancer, apiOriginDomain } = props;
+    if (!loadBalancer && !apiOriginDomain) {
+      throw new Error('FrontendStack needs either a loadBalancer or an apiOriginDomain');
+    }
+>>>>>>> Stashed changes
 
     this.bucket = new s3.Bucket(this, 'DashboardBucket', {
       bucketName: `apex-${config.envName}-dashboard-${this.account}`,
@@ -104,14 +118,21 @@ export class FrontendStack extends Stack {
       },
       additionalBehaviors: {
         '/api/*': {
-          origin: new origins.LoadBalancerV2Origin(loadBalancer, {
-            protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
-            readTimeout: Duration.seconds(60),
-          }),
+          origin: loadBalancer
+            ? new origins.LoadBalancerV2Origin(loadBalancer, {
+                protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+                readTimeout: Duration.seconds(60),
+              })
+            : new origins.HttpOrigin(apiOriginDomain!, {
+                protocolPolicy: cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+                readTimeout: Duration.seconds(60),
+              }),
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.HTTPS_ONLY,
           // API responses must never be cached — but Authorization has to reach
           // the origin, which CACHING_DISABLED alone does not guarantee.
           cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+          // Excludes the viewer Host header, which a Lambda Function URL
+          // rejects outright and an ALB does not need.
           originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
           allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
           compress: true,

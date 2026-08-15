@@ -4,7 +4,11 @@ import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import type * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+<<<<<<< Updated upstream
 import type { DatabaseRef } from './data-stack.js';
+=======
+import type * as rds from 'aws-cdk-lib/aws-rds';
+>>>>>>> Stashed changes
 import type * as sns from 'aws-cdk-lib/aws-sns';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
@@ -31,8 +35,13 @@ export class ObservabilityStack extends Stack {
     props: StackProps & {
       config: ApexEnvConfig;
       alertTopic: sns.Topic;
+<<<<<<< Updated upstream
       loadBalancer: elbv2.ApplicationLoadBalancer;
       database: DatabaseRef;
+=======
+      loadBalancer?: elbv2.ApplicationLoadBalancer;
+      database: rds.DatabaseCluster;
+>>>>>>> Stashed changes
       queues: Record<AgentName, sqs.Queue>;
       deadLetterQueues: Record<AgentName, sqs.Queue>;
       services: Record<string, ecs.FargateService>;
@@ -64,26 +73,31 @@ export class ObservabilityStack extends Stack {
     };
 
     // --- API health --------------------------------------------------------
-    alarm(
-      'ApiUnhealthyTargets',
-      loadBalancer.metrics.custom('UnHealthyHostCount', { statistic: 'Maximum', period: Duration.minutes(1) }),
-      0,
-      'Orchestrator has unhealthy targets — the dashboard and API may be degraded.',
-    );
-    alarm(
-      'ApiServerErrors',
-      loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { period: Duration.minutes(5), statistic: 'Sum' }),
-      10,
-      'Orchestrator is returning 5xx responses.',
-    );
-    alarm(
-      'ApiLatency',
-      loadBalancer.metrics.targetResponseTime({ period: Duration.minutes(5), statistic: 'p95' }),
-      2,
-      'Orchestrator p95 latency above 2 seconds.',
-      cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
-      3,
-    );
+    // Only meaningful behind a load balancer. Under Lambda the equivalent
+    // signals are function errors and throttles, which CloudWatch surfaces
+    // without a target group.
+    if (loadBalancer) {
+      alarm(
+        'ApiUnhealthyTargets',
+        loadBalancer.metrics.custom('UnHealthyHostCount', { statistic: 'Maximum', period: Duration.minutes(1) }),
+        0,
+        'Orchestrator has unhealthy targets - the dashboard and API may be degraded.',
+      );
+      alarm(
+        'ApiServerErrors',
+        loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { period: Duration.minutes(5), statistic: 'Sum' }),
+        10,
+        'Orchestrator is returning 5xx responses.',
+      );
+      alarm(
+        'ApiLatency',
+        loadBalancer.metrics.targetResponseTime({ period: Duration.minutes(5), statistic: 'p95' }),
+        2,
+        'Orchestrator p95 latency above 2 seconds.',
+        cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        3,
+      );
+    }
 
     // --- Database ----------------------------------------------------------
     alarm(
@@ -158,26 +172,28 @@ export class ObservabilityStack extends Stack {
       defaultInterval: Duration.hours(3),
     });
 
-    dashboard.addWidgets(
-      new cloudwatch.GraphWidget({
-        title: 'API — requests and errors',
-        left: [loadBalancer.metrics.requestCount({ statistic: 'Sum' })],
-        right: [
-          loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { statistic: 'Sum' }),
-          loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_4XX_COUNT, { statistic: 'Sum' }),
-        ],
-        width: 12,
-      }),
-      new cloudwatch.GraphWidget({
-        title: 'API — latency (p50 / p95 / p99)',
-        left: [
-          loadBalancer.metrics.targetResponseTime({ statistic: 'p50', label: 'p50' }),
-          loadBalancer.metrics.targetResponseTime({ statistic: 'p95', label: 'p95' }),
-          loadBalancer.metrics.targetResponseTime({ statistic: 'p99', label: 'p99' }),
-        ],
-        width: 12,
-      }),
-    );
+    if (loadBalancer) {
+      dashboard.addWidgets(
+        new cloudwatch.GraphWidget({
+          title: 'API - requests and errors',
+          left: [loadBalancer.metrics.requestCount({ statistic: 'Sum' })],
+          right: [
+            loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { statistic: 'Sum' }),
+            loadBalancer.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_4XX_COUNT, { statistic: 'Sum' }),
+          ],
+          width: 12,
+        }),
+        new cloudwatch.GraphWidget({
+          title: 'API - latency (p50 / p95 / p99)',
+          left: [
+            loadBalancer.metrics.targetResponseTime({ statistic: 'p50', label: 'p50' }),
+            loadBalancer.metrics.targetResponseTime({ statistic: 'p95', label: 'p95' }),
+            loadBalancer.metrics.targetResponseTime({ statistic: 'p99', label: 'p99' }),
+          ],
+          width: 12,
+        }),
+      );
+    }
 
     dashboard.addWidgets(
       new cloudwatch.GraphWidget({

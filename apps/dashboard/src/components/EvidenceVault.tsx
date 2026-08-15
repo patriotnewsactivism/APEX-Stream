@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { EvidenceItem } from '../api.js';
 
 export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loading: boolean }): JSX.Element {
@@ -24,8 +24,8 @@ export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loadi
         </thead>
         <tbody>
           {items.map((item) => (
-            <>
-              <tr key={item.id}>
+            <Fragment key={item.id}>
+              <tr>
                 <td>{new Date(item.captured_at).toLocaleString()}</td>
                 <td className="mono" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {item.s3_key.split('/').slice(-2).join('/')}
@@ -40,7 +40,7 @@ export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loadi
                 </td>
               </tr>
               {open === item.id && (
-                <tr key={`${item.id}-custody`}>
+                <tr>
                   <td colSpan={6} style={{ background: '#0d141d' }}>
                     <strong style={{ fontSize: 12 }}>Chain of custody</strong>
                     <div style={{ marginTop: 8 }}>
@@ -61,7 +61,7 @@ export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loadi
                   </td>
                 </tr>
               )}
-            </>
+            </Fragment>
           ))}
         </tbody>
       </table>

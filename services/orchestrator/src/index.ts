@@ -1,27 +1,14 @@
-import Fastify from 'fastify';
-import cors from '@fastify/cors';
-import helmet from '@fastify/helmet';
-import rateLimit from '@fastify/rate-limit';
-import { EventBus } from '@apex/agent-runtime';
-import { rootLogger } from '@apex/core';
-import { loadConfig } from './config.js';
-import { AuditWriter, Database } from './db.js';
-import { Authenticator, bearerFrom } from './auth.js';
-import { Dispatcher } from './dispatcher.js';
-import { BeastController } from './beast.js';
-import { registerRoutes } from './routes/index.js';
+import { buildServerParts, config, log } from './server.js';
 
-const config = loadConfig();
-const log = rootLogger.child({ service: 'orchestrator', env: config.APEX_ENV });
-
+/**
+ * Container entry point. Listens on a port and runs the Beast-run expiry sweep
+ * in-process. The lean profile uses `lambda.ts` instead, where expiry is driven
+ * by an EventBridge schedule rather than a timer in a long-lived process.
+ */
 async function main(): Promise<void> {
-  const db = new Database(config);
-  const audit = new AuditWriter(db);
-  const dispatcher = new Dispatcher(config);
-  const events = new EventBus(config.EVENT_BUS_NAME);
-  const auth = new Authenticator(config);
-  const beast = new BeastController(config, db, audit, dispatcher, events, log);
+  const { app, db, beast } = await buildServerParts();
 
+<<<<<<< Updated upstream
   const app = Fastify({
     logger: false, // structured logging goes through @apex/core's logger
     trustProxy: true, // behind an ALB
@@ -72,6 +59,8 @@ async function main(): Promise<void> {
   await registerRoutes(app, { config, db, audit, dispatcher, beast, log });
 
   // Wall-clock safety net for Beast runs, independent of any external scheduler.
+=======
+>>>>>>> Stashed changes
   const expiryTimer = setInterval(() => {
     void beast.expireOverdueRuns().catch((err) => log.error('run expiry sweep failed', { error: err }));
   }, 60_000);

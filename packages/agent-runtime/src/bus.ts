@@ -5,6 +5,8 @@ import {
   SendMessageCommand,
   ChangeMessageVisibilityCommand,
   GetQueueAttributesCommand,
+  MessageSystemAttributeName,
+  QueueAttributeName,
 } from '@aws-sdk/client-sqs';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import type { AgentId, AgentTask, TaskResult } from '@apex/core';
@@ -31,7 +33,14 @@ export class TaskQueue {
         MaxNumberOfMessages: Math.min(10, Math.max(1, max)),
         WaitTimeSeconds: waitSeconds,
         VisibilityTimeout: visibilityTimeout,
+<<<<<<< Updated upstream
         MessageSystemAttributeNames: ['ApproximateReceiveCount'],
+=======
+        // ApproximateReceiveCount is a message *system* attribute. The older
+        // `AttributeNames` field is typed as QueueAttributeName[] and will not
+        // accept it — this is the field that actually returns the retry count.
+        MessageSystemAttributeNames: [MessageSystemAttributeName.ApproximateReceiveCount],
+>>>>>>> Stashed changes
         MessageAttributeNames: ['All'],
       }),
     );
@@ -100,7 +109,10 @@ export class TaskQueue {
     const res = await this.sqs.send(
       new GetQueueAttributesCommand({
         QueueUrl: this.queueUrl,
-        AttributeNames: ['ApproximateNumberOfMessages', 'ApproximateNumberOfMessagesNotVisible'],
+        AttributeNames: [
+          QueueAttributeName.ApproximateNumberOfMessages,
+          QueueAttributeName.ApproximateNumberOfMessagesNotVisible,
+        ],
       }),
     );
     return {
