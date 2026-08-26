@@ -1,8 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-<<<<<<< Updated upstream
-  "ignoreCommand": "echo 'APEX-Stream deploys exclusively via AWS CDK (see infra/) — skipping this auto-linked Vercel build.' && exit 0"
-=======
   "buildCommand": "npm run build:dashboard",
   "outputDirectory": "apps/dashboard/dist",
   "installCommand": "npm install",
@@ -24,5 +21,4 @@
     }
   ],
   "rewrites": [{ "source": "/((?!assets/).*)", "destination": "/index.html" }]
->>>>>>> Stashed changes
 }
