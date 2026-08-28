@@ -32,6 +32,7 @@ export class SecurityStack extends cdk.Stack {
       encryption: s3.BucketEncryption.KMS,
       encryptionKey: this.evidenceKey,
       versioned: true,
+      objectLockEnabled: true,
       objectLockDefaultRetention: s3.ObjectRetention.compliance(cdk.Duration.days(retentionDays)),
       enforceSSL: true,
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
