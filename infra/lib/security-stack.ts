@@ -1,65 +1,57 @@
-import { Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import type { Construct } from 'constructs';
-import type { ApexEnvConfig } from './config.js';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { Construct } from 'constructs';
 
-/**
- * Encryption keys.
- *
- * Two customer-managed keys rather than one. Separation means the evidence key
- * can carry a stricter policy than the general data key, and a compromised
- * service role cannot decrypt everything just because it could decrypt
- * something. Both rotate annually.
- *
- * Consumers are granted use of these keys through *identity* policies on their
- * own roles, never by adding statements to the key policy. Writing a consumer's
- * role ARN into a key policy would make this stack depend on the stack that
- * defines the role, and since that stack already depends on this one, CDK
- * rejects the cycle. Identity-based grants work because CDK's default key
- * policy already delegates to IAM for principals in the same account.
- *
- * The evidence key is intentionally the strictest: it never gets a deletion
- * window shorter than 30 days, and in production it cannot be deleted at all
- * without first clearing termination protection — losing that key would render
- * every archived artefact permanently unreadable.
- */
-export class SecurityStack extends Stack {
-  readonly dataKey: kms.Key;
-  readonly evidenceKey: kms.Key;
+export interface SecurityStackProps extends cdk.StackProps {
+  environmentName: string;
+  objectLockRetentionDays?: number;
+}
 
-  constructor(scope: Construct, id: string, props: StackProps & { config: ApexEnvConfig }) {
+export class SecurityStack extends cdk.Stack {
+  public readonly evidenceKey: kms.Key;
+  public readonly evidenceBucket: s3.Bucket;
+
+  constructor(scope: Construct, id: string, props: SecurityStackProps) {
     super(scope, id, props);
-    const { config } = props;
-    const removalPolicy = config.removalProtection ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
 
-    this.dataKey = new kms.Key(this, 'DataKey', {
-      alias: `apex-${config.envName}-data`,
-      description: 'APEX Stream - database, queues and memory encryption',
+    const retentionDays = props.objectLockRetentionDays ?? 90;
+
+    // Automated KMS CMK key rotation
+    this.evidenceKey = new kms.Key(this, 'EvidenceKmsKey', {
       enableKeyRotation: true,
-      rotationPeriod: Duration.days(365),
-      removalPolicy,
-      pendingWindow: Duration.days(config.removalProtection ? 30 : 7),
+      description: `APEX Stream Evidence Encryption Key - ${props.environmentName}`,
+      alias: `alias/apex-${props.environmentName}-evidence`,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-    this.evidenceKey = new kms.Key(this, 'EvidenceKey', {
-      alias: `apex-${config.envName}-evidence`,
-      description: 'APEX Stream - evidence archive (write-once artefacts)',
-      enableKeyRotation: true,
-      rotationPeriod: Duration.days(365),
-      removalPolicy: RemovalPolicy.RETAIN, // never destroy with the stack
-      pendingWindow: Duration.days(30),
+    // S3 Object Lock bucket with compliance retention and KMS encryption
+    this.evidenceBucket = new s3.Bucket(this, 'EvidenceLedgerBucket', {
+      bucketName: `apex-${props.environmentName}-evidence-ledger-${this.account}`,
+      encryption: s3.BucketEncryption.KMS,
+      encryptionKey: this.evidenceKey,
+      versioned: true,
+      objectLockDefaultRetention: s3.ObjectRetention.compliance(cdk.Duration.days(retentionDays)),
+      enforceSSL: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
     });
 
-<<<<<<< Updated upstream
-    this.secretsKey = new kms.Key(this, 'SecretsKey', {
-      alias: `apex-${config.envName}-secrets`,
-      description: 'APEX Stream - database credentials and API tokens',
-      enableKeyRotation: true,
-      rotationPeriod: Duration.days(365),
-      removalPolicy,
-      pendingWindow: Duration.days(config.removalProtection ? 30 : 7),
-    });
-=======
->>>>>>> Stashed changes
+    // Prevent unauthorized deletion policies
+    this.evidenceBucket.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'DenyUnencryptedObjectUploads',
+        effect: iam.Effect.DENY,
+        principals: [new iam.AnyPrincipal()],
+        actions: ['s3:PutObject'],
+        resources: [this.evidenceBucket.arnForObjects('*')],
+        conditions: {
+          StringNotEquals: {
+            's3:x-amz-server-side-encryption-aws-kms-key-id': this.evidenceKey.keyArn,
+          },
+        },
+      })
+    );
   }
 }
