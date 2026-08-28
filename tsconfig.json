@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/agent-runtime" },
+    { "path": "packages/workflow-engine" },
+    { "path": "packages/youtube" },
+    { "path": "services/orchestrator" },
+    { "path": "services/agent-aria" },
+    { "path": "services/agent-atlas" },
+    { "path": "services/agent-sentinel" },
+    { "path": "services/agent-archivist" },
+    { "path": "services/agent-warden" },
+    { "path": "infra" }
+  ]
+}
