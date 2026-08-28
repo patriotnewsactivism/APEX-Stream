@@ -33,14 +33,10 @@ export class TaskQueue {
         MaxNumberOfMessages: Math.min(10, Math.max(1, max)),
         WaitTimeSeconds: waitSeconds,
         VisibilityTimeout: visibilityTimeout,
-<<<<<<< Updated upstream
-        MessageSystemAttributeNames: ['ApproximateReceiveCount'],
-=======
-        // ApproximateReceiveCount is a message *system* attribute. The older
-        // `AttributeNames` field is typed as QueueAttributeName[] and will not
-        // accept it — this is the field that actually returns the retry count.
+        // ApproximateReceiveCount is a message system attribute. Using the
+        // system-attribute enum keeps this compatible with current AWS SDK
+        // typings and actually returns the retry count.
         MessageSystemAttributeNames: [MessageSystemAttributeName.ApproximateReceiveCount],
->>>>>>> Stashed changes
         MessageAttributeNames: ['All'],
       }),
     );
