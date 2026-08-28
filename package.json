@@ -24,8 +24,5 @@
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"
-  },
-  "dependencies": {
-    "qwen": "^0.0.0"
   }
 }
