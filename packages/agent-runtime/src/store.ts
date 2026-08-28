@@ -1,53 +1,19 @@
-<<<<<<< Updated upstream
-import pg from 'pg';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-=======
->>>>>>> Stashed changes
 import type { AnomalyScoreResult, SignalObservation } from '@apex/core';
 import type { SqlExecutor } from './sql.js';
 
-// See services/orchestrator/src/db.ts's loadRdsCaBundle for the full
-// explanation -- same fix, same underlying bug, this package's own pg.Pool.
-function loadRdsCaBundle(): string | undefined {
-  try {
-    return readFileSync(join(process.cwd(), 'packages/core/certs/rds-global-bundle.pem'), 'utf8');
-  } catch (err) {
-    console.error('rds ca bundle missing, falling back to rejectUnauthorized:false', err);
-    return undefined;
-  }
-}
-
 /**
- * Postgres access for collector agents.
+ * Database access for collector agents.
  *
  * Deliberately narrow: agents read the sources they own and write observations,
  * signals and anomalies. They cannot read evidence, other agents' rows, or the
  * audit log - the database role backing the executor is scoped to match.
+ *
+ * Store is intentionally transport-agnostic. Container deployments use the
+ * Postgres executor while the lean Lambda profile uses the RDS Data API; both
+ * implement SqlExecutor so the business queries remain identical.
  */
 export class Store {
-<<<<<<< Updated upstream
-  private readonly pool: pg.Pool;
-
-  constructor(connectionString = process.env.DATABASE_URL) {
-    if (!connectionString) throw new Error('DATABASE_URL is required');
-    this.pool = new pg.Pool({
-      connectionString,
-      max: 5,
-      statement_timeout: 20_000,
-      ssl:
-        process.env.DATABASE_CA_REQUIRED === 'false'
-          ? undefined
-          : (() => {
-              const ca = loadRdsCaBundle();
-              return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
-            })(),
-      application_name: `apex-${process.env.APEX_AGENT_ID ?? 'agent'}`,
-    });
-  }
-=======
   constructor(private readonly db: SqlExecutor) {}
->>>>>>> Stashed changes
 
   /**
    * Returns the sources this task is responsible for.
@@ -78,8 +44,12 @@ export class Store {
       [input.ownerAgent, input.sourceId ?? null, input.tags, input.shard, Math.max(1, input.shardCount)],
     );
     return rows.map((r) => ({
-      id: r.id, label: r.label, url: r.url, kind: r.kind,
-      authority: Number(r.authority), intervalSeconds: r.interval_seconds,
+      id: r.id,
+      label: r.label,
+      url: r.url,
+      kind: r.kind,
+      authority: Number(r.authority),
+      intervalSeconds: r.interval_seconds,
     }));
   }
 
@@ -157,8 +127,15 @@ export class Store {
          ON CONFLICT (source_id, content_hash) DO NOTHING
          RETURNING id`,
         [
-          input.sourceId, input.collectedBy, input.occurredAt, input.title, input.content,
-          input.contentHash, input.fingerprint, input.url, JSON.stringify(input.metadata),
+          input.sourceId,
+          input.collectedBy,
+          input.occurredAt,
+          input.title,
+          input.content,
+          input.contentHash,
+          input.fingerprint,
+          input.url,
+          JSON.stringify(input.metadata),
         ],
       );
       const observationId = inserted[0]?.id;
@@ -192,10 +169,19 @@ export class Store {
        VALUES ($1,$2,$3,$4,now(),$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING id`,
       [
-        input.runId, input.observationId, input.sourceId, input.detectedBy,
-        input.result.score, input.result.band, input.result.confidence, input.summary,
-        input.result.profileId, input.result.profileVersion,
-        JSON.stringify(input.result.components), input.result.inputHash, input.result.explanation,
+        input.runId,
+        input.observationId,
+        input.sourceId,
+        input.detectedBy,
+        input.result.score,
+        input.result.band,
+        input.result.confidence,
+        input.summary,
+        input.result.profileId,
+        input.result.profileVersion,
+        JSON.stringify(input.result.components),
+        input.result.inputHash,
+        input.result.explanation,
       ],
     );
     return rows[0]?.id ?? '';
@@ -216,8 +202,14 @@ export class Store {
   }
 
   async getObservation(id: string): Promise<{
-    id: string; sourceId: string; url: string | null; title: string | null;
-    content: string; contentHash: string; collectedAt: string; collectedBy: string;
+    id: string;
+    sourceId: string;
+    url: string | null;
+    title: string | null;
+    content: string;
+    contentHash: string;
+    collectedAt: string;
+    collectedBy: string;
     metadata: Record<string, unknown>;
   } | null> {
     const rows = await this.db.query<Record<string, unknown>>(
@@ -241,10 +233,20 @@ export class Store {
   }
 
   async saveEvidence(record: {
-    id: string; anomalyId: string | null; observationId: string; capturedBy: string;
-    capturedAt: string; s3Bucket: string; s3Key: string; s3VersionId: string | null;
-    sha256: string; bytes: number; contentType: string; retainUntil: string;
-    manifestSha256: string; chainOfCustody: unknown;
+    id: string;
+    anomalyId: string | null;
+    observationId: string;
+    capturedBy: string;
+    capturedAt: string;
+    s3Bucket: string;
+    s3Key: string;
+    s3VersionId: string | null;
+    sha256: string;
+    bytes: number;
+    contentType: string;
+    retainUntil: string;
+    manifestSha256: string;
+    chainOfCustody: unknown;
   }): Promise<void> {
     await this.db.query(
       `INSERT INTO evidence
@@ -253,9 +255,20 @@ export class Store {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (id) DO NOTHING`,
       [
-        record.id, record.anomalyId, record.observationId, record.capturedBy, record.capturedAt,
-        record.s3Bucket, record.s3Key, record.s3VersionId, record.sha256, record.bytes,
-        record.contentType, record.retainUntil, record.manifestSha256, JSON.stringify(record.chainOfCustody),
+        record.id,
+        record.anomalyId,
+        record.observationId,
+        record.capturedBy,
+        record.capturedAt,
+        record.s3Bucket,
+        record.s3Key,
+        record.s3VersionId,
+        record.sha256,
+        record.bytes,
+        record.contentType,
+        record.retainUntil,
+        record.manifestSha256,
+        JSON.stringify(record.chainOfCustody),
       ],
     );
   }
