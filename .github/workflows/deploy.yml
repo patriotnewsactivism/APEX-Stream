@@ -61,14 +61,10 @@ jobs:
 
   # ---------------------------------------------------------------------------
   build:
-    name: Build and push image (${{ matrix.service }})
+    name: Build and push images
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [orchestrator, agent-aria, agent-atlas, agent-sentinel, agent-archivist, agent-warden]
     steps:
       - uses: actions/checkout@v4
 
@@ -83,47 +79,13 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-<<<<<<< Updated upstream
-      - name: Build and push
-=======
       - name: Build and push container images
->>>>>>> Stashed changes
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           TAG: ${{ needs.test.outputs.image_tag }}
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
-<<<<<<< Updated upstream
-          repo="$REGISTRY/apex-$APEX_ENV/$SERVICE"
-          # The repository is created by CDK. On the very first deploy it does
-          # not exist yet, so create it here and let CDK adopt it after.
-          #
-          # The mutability mode must be IMMUTABLE_WITH_EXCLUSION, not IMMUTABLE:
-          # ECR rejects exclusion filters outright when the mode is plain
-          # IMMUTABLE ("ImageTagMutabilityExclusionFilters are not allowed when
-          # imageTagMutability is set as IMMUTABLE"). The two are one setting,
-          # not a base plus an override.
-          #
-          # This line was wrong from the moment the exclusion filter was added
-          # and nothing caught it, because the fallback only fires for a repo
-          # that does not exist yet and every service at the time already had
-          # one. agent-warden was the first new service since, so it was the
-          # first request that ever reached ECR with these flags.
-          aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$SERVICE" >/dev/null 2>&1 \
-            || aws ecr create-repository --repository-name "apex-$APEX_ENV/$SERVICE" \
-                 --image-scanning-configuration scanOnPush=true \
-                 --image-tag-mutability IMMUTABLE_WITH_EXCLUSION \
-                 --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest >/dev/null
-          docker buildx build \
-            --file "services/$SERVICE/Dockerfile" \
-            --platform linux/arm64 \
-            --tag "$repo:$TAG" \
-            --tag "$repo:latest" \
-            --cache-from "type=gha,scope=$SERVICE" \
-            --cache-to "type=gha,mode=max,scope=$SERVICE" \
-            --push .
-=======
           # The lean profile runs the API and three agents on Lambda, bundled by
           # CDK during synth. Only Sentinel needs a container image, so the other
           # four builds are skipped entirely - that is most of the build time.
@@ -137,9 +99,14 @@ jobs:
             echo "::group::$service"
             # The repository is created by CDK. On the very first deploy it does
             # not exist yet, so create it here and let CDK adopt it after.
+            #
+            # Use IMMUTABLE_WITH_EXCLUSION so the "latest" tag can be overwritten
+            # while all SHA-tagged images remain immutable.
             aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$service" >/dev/null 2>&1 \
               || aws ecr create-repository --repository-name "apex-$APEX_ENV/$service" \
-                   --image-scanning-configuration scanOnPush=true --image-tag-mutability IMMUTABLE >/dev/null
+                   --image-scanning-configuration scanOnPush=true \
+                   --image-tag-mutability IMMUTABLE_WITH_EXCLUSION \
+                   --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest >/dev/null
             docker buildx build \
               --file "services/$service/Dockerfile" \
               --platform linux/arm64 \
@@ -150,7 +117,6 @@ jobs:
               --push .
             echo "::endgroup::"
           done
->>>>>>> Stashed changes
 
   # ---------------------------------------------------------------------------
   infrastructure:
@@ -231,13 +197,8 @@ jobs:
   # ---------------------------------------------------------------------------
   migrate:
     name: Run database migrations
-<<<<<<< Updated upstream
-    needs: [test, build, infrastructure]
-    if: ${{ !inputs.skip_migrations }}
-=======
     needs: [build, infrastructure]
     if: ${{ !inputs.skip_migrations && (inputs.environment || 'lean') != 'lean' }}
->>>>>>> Stashed changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
