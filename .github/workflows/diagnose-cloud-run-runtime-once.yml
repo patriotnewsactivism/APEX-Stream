@@ -11,7 +11,6 @@ permissions:
 env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
   GCP_REGION: ${{ vars.GCP_REGION }}
-  SERVICE_NAME: apex
 
 jobs:
   diagnose:
@@ -23,29 +22,25 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@v3
-      - name: Inspect existing services without secret values
+      - name: Identify existing service candidates without secret values
         shell: bash
         run: |
           set -euo pipefail
-          echo 'Configured shared apex service:'
-          gcloud run services describe "$SERVICE_NAME" \
-            --project "$GCP_PROJECT" \
-            --region "$GCP_REGION" \
-            --format=json > service.json
-          jq '{
-            name:.metadata.name,
-            url:.status.url,
-            latestCreatedRevision:.status.latestCreatedRevisionName,
-            latestReadyRevision:.status.latestReadyRevisionName,
-            serviceAccount:.spec.template.spec.serviceAccountName,
-            image:.spec.template.spec.containers[0].image,
-            envNames:[.spec.template.spec.containers[0].env[]?.name],
-            secretRefs:[.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | {name:.name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}]
-          }' service.json
-
-          echo 'All existing Cloud Run services in configured project/region:'
-          gcloud run services list \
-            --project "$GCP_PROJECT" \
-            --region "$GCP_REGION" \
-            --platform managed \
-            --format='table(metadata.name,status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].image)'
+          for service in apex island-king-pc; do
+            echo "=== $service ==="
+            gcloud run services describe "$service" \
+              --project "$GCP_PROJECT" \
+              --region "$GCP_REGION" \
+              --format=json > "${service}.json"
+            jq '{
+              name:.metadata.name,
+              labels:.metadata.labels,
+              annotations:(.metadata.annotations | with_entries(select(.key | test("source|build|client|creator|lastModifier"; "i")))),
+              url:.status.url,
+              latestReadyRevision:.status.latestReadyRevisionName,
+              image:.spec.template.spec.containers[0].image,
+              command:.spec.template.spec.containers[0].command,
+              args:.spec.template.spec.containers[0].args,
+              envNames:[.spec.template.spec.containers[0].env[]?.name]
+            }' "${service}.json"
+          done
