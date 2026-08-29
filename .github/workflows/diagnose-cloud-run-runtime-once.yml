@@ -23,10 +23,11 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
       - uses: google-github-actions/setup-gcloud@v3
-      - name: Inspect existing service without secret values
+      - name: Inspect existing services without secret values
         shell: bash
         run: |
           set -euo pipefail
+          echo 'Configured shared apex service:'
           gcloud run services describe "$SERVICE_NAME" \
             --project "$GCP_PROJECT" \
             --region "$GCP_REGION" \
@@ -39,7 +40,12 @@ jobs:
             serviceAccount:.spec.template.spec.serviceAccountName,
             image:.spec.template.spec.containers[0].image,
             envNames:[.spec.template.spec.containers[0].env[]?.name],
-            secretRefs:[.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | {name:.name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}],
-            minScale:.metadata.annotations["autoscaling.knative.dev/minScale"],
-            maxScale:.metadata.annotations["autoscaling.knative.dev/maxScale"]
+            secretRefs:[.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | {name:.name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}]
           }' service.json
+
+          echo 'All existing Cloud Run services in configured project/region:'
+          gcloud run services list \
+            --project "$GCP_PROJECT" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --format='table(metadata.name,status.url,status.latestReadyRevisionName,spec.template.spec.containers[0].image)'
