@@ -1,0 +1,39 @@
+name: Finalize Cloud Run hardening once
+
+on:
+  push:
+    branches: [fix/cloud-run-production-hardening]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/cloud-run-production-hardening
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Refresh lockfile and verify install
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --package-lock-only --ignore-scripts
+          npm ci --ignore-scripts
+      - name: Remove one-time workflows and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/finalize-cloud-run-hardening-once.yml
+          rm -f .github/workflows/diagnose-cloud-run-runtime-once.yml
+          git config user.name "Matthew Reardon"
+          git config user.email "patriotnewsactivism@proton.me"
+          git add package-lock.json .github/workflows/finalize-cloud-run-hardening-once.yml .github/workflows/diagnose-cloud-run-runtime-once.yml
+          git commit -m "chore: refresh lockfile after AWS infra retirement"
+          git push origin HEAD:fix/cloud-run-production-hardening
