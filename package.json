@@ -2,7 +2,7 @@
   "name": "apex-stream",
   "version": "0.1.0",
   "private": true,
-  "description": "APEX Stream — cloud-native multi-agent monitoring, anomaly detection and evidence archival platform on AWS",
+  "description": "APEX Stream — multi-agent monitoring, anomaly detection and evidence workflow platform being migrated to Google Cloud Run",
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
@@ -10,16 +10,14 @@
   "workspaces": [
     "packages/*",
     "services/*",
-    "apps/*",
-    "infra"
+    "apps/*"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "tsc -b packages/core packages/agent-runtime packages/workflow-engine packages/youtube services/orchestrator services/agent-aria services/agent-atlas services/agent-sentinel services/agent-archivist services/agent-warden",
     "test": "node --test packages/core/test/*.test.mjs packages/workflow-engine/test/*.test.mjs",
-    "synth": "npm run synth -w infra",
     "dashboard:dev": "npm run dev -w @apex/dashboard",
-    "clean": "rm -rf packages/*/dist services/*/dist apps/*/dist infra/cdk.out **/*.tsbuildinfo"
+    "clean": "rm -rf packages/*/dist services/*/dist apps/*/dist **/*.tsbuildinfo"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
