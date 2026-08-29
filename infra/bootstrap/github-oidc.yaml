@@ -10,10 +10,20 @@ Parameters:
     Type: String
     Default: patriotnewsactivism
     Description: GitHub organisation or username that owns the repository.
+  GitHubOwnerId:
+    Type: String
+    Default: '221751938'
+    AllowedPattern: '^[0-9]+$'
+    Description: Immutable GitHub owner ID observed in the repository OIDC token.
   GitHubRepo:
     Type: String
     Default: APEX-Stream
     Description: Repository name.
+  GitHubRepoId:
+    Type: String
+    Default: '1328886448'
+    AllowedPattern: '^[0-9]+$'
+    Description: Immutable GitHub repository ID observed in the repository OIDC token.
   AllowedBranch:
     Type: String
     Default: main
@@ -50,19 +60,10 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                # Scoped to one repository and one branch. Without this
-                # condition any GitHub repository on the internet could assume
-                # the role.
-                # Wildcards around org/repo account for GitHub's immutable-ID sub
-                # claim format (repo:org@ownerId/repo@repoId:ref:...), which GitHub
-                # issues instead of the plain-name format for at least some repos
-                # (observed on this repo after a rename) -- confirmed by decoding a
-                # real token in CI: sub was
-                # 'repo:patriotnewsactivism@221751938/APEX-Stream@1328886448:ref:refs/heads/main',
-                # not the plain 'repo:patriotnewsactivism/APEX-Stream:...' the unmodified
-                # template below would produce, so plain StringEquals never matched.
-                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}*/${GitHubRepo}*:ref:refs/heads/${AllowedBranch}'
+                # GitHub currently issues an immutable-ID-bound subject for this
+                # repository. Match that exact owner/repository identity and the
+                # single production branch; do not broaden this with wildcards.
+                token.actions.githubusercontent.com:sub: !Sub 'repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}'
       Policies:
         - PolicyName: apex-deploy
           PolicyDocument:
@@ -142,9 +143,12 @@ Outputs:
   RoleArn:
     Description: Add this to GitHub as the repository variable AWS_DEPLOY_ROLE_ARN
     Value: !GetAtt DeploymentRole.Arn
+  ExpectedSubject:
+    Description: Exact GitHub OIDC subject permitted to assume the role.
+    Value: !Sub 'repo:${GitHubOrg}@${GitHubOwnerId}/${GitHubRepo}@${GitHubRepoId}:ref:refs/heads/${AllowedBranch}'
   NextStep:
     Description: What to do next
     Value: >
-      Copy RoleArn into GitHub → Settings → Secrets and variables → Actions →
-      Variables, named AWS_DEPLOY_ROLE_ARN. Then add AWS_REGION and
-      APEX_ALERT_EMAIL, and run the Deploy workflow.
+      Update the existing apex-github-deploy trust relationship from this
+      template, then rerun the Deploy workflow. Do not replace OIDC with static
+      AWS access keys and do not broaden the subject to other branches/repos.
