@@ -1,19 +1,6 @@
 import { GENESIS_HASH, sealEntry, type AuditEntry, type AuditEntryInput } from '@apex/core';
-<<<<<<< Updated upstream
-import type { Config } from './config.js';
-import { loadRdsCaBundle } from './rds-ca.js';
-=======
 import type { SqlExecutor } from '@apex/agent-runtime';
->>>>>>> Stashed changes
 
-/**
- * Postgres access.
- *
- * Aurora Serverless v2 scales connections poorly if every task opens its own
- * pool, so the pool is small and shared, and long analytical reads are pushed
- * to the reader endpoint. Statements carry a timeout so a pathological query
- * cannot pin a connection indefinitely.
- */
 /**
  * Thin convenience layer over whichever SqlExecutor this deployment uses —
  * a Postgres pool in containers, the RDS Data API under Lambda. Every query in
@@ -22,26 +9,8 @@ import type { SqlExecutor } from '@apex/agent-runtime';
 export class Database {
   constructor(private readonly executor: SqlExecutor) {}
 
-<<<<<<< Updated upstream
-  constructor(config: Config) {
-    this.pool = new pg.Pool({
-      connectionString: config.DATABASE_URL,
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
-      statement_timeout: 15_000,
-      ssl: config.DATABASE_CA_REQUIRED
-        ? (() => {
-            const ca = loadRdsCaBundle();
-            return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
-          })()
-        : undefined,
-      application_name: 'apex-orchestrator',
-    });
-=======
   async query<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T[]> {
     return this.executor.query<T>(text, params);
->>>>>>> Stashed changes
   }
 
   async one<T = Record<string, unknown>>(text: string, params: unknown[] = []): Promise<T | null> {
