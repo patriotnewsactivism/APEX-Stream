@@ -5,7 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A PR check never needs write access to anything.
 permissions:
   contents: read
 
@@ -15,9 +14,9 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck, test and synth
+    name: Typecheck, test and build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -44,40 +43,8 @@ jobs:
           node --test packages/core/test/*.test.mjs
           node --test packages/workflow-engine/test/*.test.mjs
 
-      - name: Typecheck dashboard
+      - name: Build dashboard
         run: npm run build -w @apex/dashboard
 
-      - name: Synthesise infrastructure
-        working-directory: infra
-        env:
-          # No account or region: the stacks synthesise environment-agnostic,
-          # so this step needs no AWS credentials.
-          APEX_ALERT_EMAIL: ci@example.com
-        run: |
-          # NetworkStack's Vpc asks for the region's availability zones. That is a
-          # context lookup, and on a stack with a concrete account CDK resolves it by
-          # calling EC2 -- which a PR check has no credentials for, by design. Seeding
-          # the answer in cdk.context.json (gitignored, since it is normally an
-          # account-specific cache) keeps synth offline.
-          #
-          # Going environment-agnostic instead does not work here: AuthStack builds its
-          # Cognito domain prefix from `this.account.slice(-6)`, and slicing the
-          # unresolved account token yields characters Cognito rejects.
-          cat > cdk.context.json <<JSON
-          {
-            "availability-zones:account=${CDK_DEFAULT_ACCOUNT}:region=${CDK_DEFAULT_REGION}": [
-              "${CDK_DEFAULT_REGION}a",
-              "${CDK_DEFAULT_REGION}b"
-            ]
-          }
-          JSON
-          npm run build
-          npx cdk synth --quiet
-
-      - name: Build container images
-        run: |
-          for service in orchestrator agent-aria agent-atlas agent-sentinel agent-archivist agent-warden; do
-            echo "::group::$service"
-            docker build -f "services/$service/Dockerfile" -t "apex-$service:pr" .
-            echo "::endgroup::"
-          done
+      - name: Build active Cloud Run container
+        run: docker build -f services/orchestrator/Dockerfile -t apex-stream-orchestrator:pr .
