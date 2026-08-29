@@ -21,6 +21,7 @@ import type { BeastController } from '../beast.js';
 import type { AuditWriter, Database } from '../db.js';
 import type { Dispatcher } from '../dispatcher.js';
 import { buildEffects } from '../effects.js';
+import { registerCommentRoutes } from './comments.js';
 import { SentinelLauncher, readSentinelConfig } from '../sentinel.js';
 import type { Config } from '../config.js';
 
