@@ -25,7 +25,6 @@ env:
   ARTIFACT_REPO: apex-stream
 
 jobs:
-  # ---------------------------------------------------------------------------
   test:
     name: Build and test packages
     runs-on: ubuntu-latest
@@ -53,7 +52,6 @@ jobs:
       - id: meta
         run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
-  # ---------------------------------------------------------------------------
   deploy:
     name: Build and deploy to Cloud Run
     needs: test
@@ -73,23 +71,15 @@ jobs:
       - name: Configure Docker auth for Artifact Registry
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-      - name: Create Artifact Registry repository (if not exists)
-        run: |
-          gcloud artifacts repositories describe ${{ env.ARTIFACT_REPO }} \\
-            --project=${{ env.GCP_PROJECT }} --location=${{ env.GCP_REGION }} 2>/dev/null \\
-          || gcloud artifacts repositories create ${{ env.ARTIFACT_REPO }} \\
-            --project=${{ env.GCP_PROJECT }} --location=${{ env.GCP_REGION }} \\
-            --repository-format=docker
-
       - name: Build and push container image
         id: build
         run: |
           IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/orchestrator"
           TAG=${{ needs.test.outputs.image_tag }}
-          docker build \\
-            --file services/orchestrator/Dockerfile \\
-            --tag "$IMAGE:$TAG" \\
-            --tag "$IMAGE:latest" \\
+          docker build \
+            --file services/orchestrator/Dockerfile \
+            --tag "$IMAGE:$TAG" \
+            --tag "$IMAGE:latest" \
             .
           docker push "$IMAGE:$TAG"
           docker push "$IMAGE:latest"
@@ -98,71 +88,36 @@ jobs:
       - name: Deploy to Cloud Run
         id: deploy
         run: |
-          gcloud run deploy ${{ env.SERVICE_NAME }} \\
-            --image ${{ steps.build.outputs.image }} \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
-            --port=8080 \\
-            --allow-unauthenticated \\
-            --min-instances=1 \\
-            --max-instances=10 \\
-            --memory=2Gi \\
-            --cpu=2 \\
-            --timeout=300 \\
-            --no-traffic \\
-            --tag=canary-${{ needs.test.outputs.image_tag }} \\
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image ${{ steps.build.outputs.image }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --region=${{ env.GCP_REGION }} \
+            --port=8080 \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --max-instances=10 \
+            --memory=2Gi \
+            --cpu=2 \
+            --timeout=300 \
+            --no-traffic \
+            --tag=canary-${{ needs.test.outputs.image_tag }} \
             --format=json > deploy-output.json
           echo "Deployed new revision (no traffic yet)"
 
-      - name: Run database migrations
-        if: ${{ !inputs.skip_migrations }}
-        run: |
-          # Create and execute a one-off Cloud Run job for migrations
-          JOB_NAME="apex-migrate-${{ needs.test.outputs.image_tag }}"
-          gcloud run jobs create "$JOB_NAME" \\
-            --image ${{ steps.build.outputs.image }} \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
-            --memory=2Gi \\
-            --cpu=2 \\
-            --task-timeout=300s \\
-            --command="node" \\
-            --args="services/orchestrator/dist/migrate.js" \\
-            --set-cloudsql-instances="" 2>/dev/null \\
-          || true
-
-          # Pull env vars from the existing Cloud Run service and apply to the job
-          # so migrations have the same DB connection string + API keys
-          gcloud run services describe ${{ env.SERVICE_NAME }} \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
-            --format="value(spec.template.containers[0].env)" > /tmp/apex-env.txt 2>/dev/null
-
-          # Execute the migration job
-          if gcloud run jobs execute "$JOB_NAME" \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
-            --wait 2>&1; then
-            echo "Migrations completed"
-          else
-            echo "::warning::Migration job failed - check logs"
-            # Don't fail the deploy if migrations fail - the new code may not need them
-          fi
-
       - name: Route traffic to new revision
         run: |
-          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --region=${{ env.GCP_REGION }} \
             --to-latest
           echo "Traffic routed to latest revision"
 
       - name: Verify deployment
         run: |
           sleep 20
-          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --project=${{ env.GCP_PROJECT }} \
+            --region=${{ env.GCP_REGION }} \
             --format='value(status.url)')
           echo "Service URL: $URL"
           for i in 1 2 3 4 5; do
@@ -176,19 +131,3 @@ jobs:
           done
           echo "::error::Health check failed after 5 attempts"
           exit 1
-
-      - name: Cleanup old migration jobs
-        run: |
-          # Delete migration jobs older than the current one to keep things tidy
-          gcloud run jobs list \\
-            --project=${{ env.GCP_PROJECT }} \\
-            --region=${{ env.GCP_REGION }} \\
-            --filter="metadata.name:startswith(apex-migrate-)" \\
-            --format="value(metadata.name)" 2>/dev/null \\
-            | while read job; do
-            if [ "$job" != "apex-migrate-${{ needs.test.outputs.image_tag }}" ]; then
-              gcloud run jobs delete "$job" --quiet \\
-                --project=${{ env.GCP_PROJECT }} \\
-                --region=${{ env.GCP_REGION }} 2>/dev/null || true
-            fi
-          done
