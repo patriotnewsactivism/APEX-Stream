@@ -1,0 +1,46 @@
+name: Diagnose AWS repair access
+
+on:
+  push:
+    branches: [ops/diagnose-aws-oidc]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+  AWS_DEPLOY_ROLE_ARN_VAR: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+  AWS_DEPLOY_ROLE_ARN_SECRET: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report AWS configuration presence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          present() { [[ -n "${!1:-}" ]] && echo yes || echo no; }
+          echo "AWS_ACCESS_KEY_ID=$(present AWS_ACCESS_KEY_ID)"
+          echo "AWS_SECRET_ACCESS_KEY=$(present AWS_SECRET_ACCESS_KEY)"
+          echo "AWS_SESSION_TOKEN=$(present AWS_SESSION_TOKEN)"
+          echo "AWS_DEPLOY_ROLE_ARN_VAR=$(present AWS_DEPLOY_ROLE_ARN_VAR)"
+          echo "AWS_DEPLOY_ROLE_ARN_SECRET=$(present AWS_DEPLOY_ROLE_ARN_SECRET)"
+      - name: Identify static AWS principal read-only
+        if: env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != ''
+        shell: bash
+        run: aws sts get-caller-identity
+      - name: Read deploy role trust policy if permitted
+        if: env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' && (env.AWS_DEPLOY_ROLE_ARN_VAR != '' || env.AWS_DEPLOY_ROLE_ARN_SECRET != '')
+        shell: bash
+        run: |
+          set -euo pipefail
+          arn="${AWS_DEPLOY_ROLE_ARN_VAR:-$AWS_DEPLOY_ROLE_ARN_SECRET}"
+          role="${arn##*/}"
+          aws iam get-role --role-name "$role" --query 'Role.AssumeRolePolicyDocument' --output json
