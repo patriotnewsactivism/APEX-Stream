@@ -101,6 +101,7 @@ jobs:
             --timeout=300 \
             --no-traffic \
             --tag=canary-${{ needs.test.outputs.image_tag }} \
+            --update-env-vars "EVENT_BUS_NAME=apex-events,QUEUE_URL_ARIA=https://sqs.us-east-1.amazonaws.com/000000000000/apex-aria,QUEUE_URL_ATLAS=https://sqs.us-east-1.amazonaws.com/000000000000/apex-atlas,QUEUE_URL_SENTINEL=https://sqs.us-east-1.amazonaws.com/000000000000/apex-sentinel,QUEUE_URL_ARCHIVIST=https://sqs.us-east-1.amazonaws.com/000000000000/apex-archivist,QUEUE_URL_WARDEN=https://sqs.us-east-1.amazonaws.com/000000000000/apex-warden,EVIDENCE_BUCKET=apex-evidence,MEMORY_TABLE=apex-memory,KMS_KEY_ID=alias/apex-key,COGNITO_USER_POOL_ID=us-east-1_000000000,COGNITO_CLIENT_ID=0000000000000000000,DATABASE_CA_REQUIRED=false" \
             --format=json > deploy-output.json
           echo "Deployed new revision (no traffic yet)"
 
