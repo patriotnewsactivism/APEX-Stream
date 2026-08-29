@@ -4,24 +4,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      skip_migrations:
-        description: Skip database migrations
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: deploy-apex
+  group: deploy-apex-stream
   cancel-in-progress: false
 
 env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
   GCP_REGION: ${{ vars.GCP_REGION }}
-  SERVICE_NAME: apex
+  SERVICE_NAME: ${{ vars.APEX_STREAM_CLOUD_RUN_SERVICE }}
+  DEPLOY_ENABLED: ${{ vars.APEX_STREAM_DEPLOY_ENABLED }}
   ARTIFACT_REPO: apex-stream
 
 jobs:
@@ -46,89 +41,123 @@ jobs:
           npm run build -w @apex/core
           npm run build -w @apex/agent-runtime
           npm run build -w @apex/workflow-engine
+          npm run build -w @apex/youtube
+          npm run build -w @apex/orchestrator
           node --test packages/core/test/*.test.mjs
           node --test packages/workflow-engine/test/*.test.mjs
 
       - id: meta
-        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+        run: echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
   deploy:
-    name: Build and deploy to Cloud Run
+    name: Update verified APEX-Stream Cloud Run service
     needs: test
+    if: vars.APEX_STREAM_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
-      - id: auth
-        uses: google-github-actions/auth@v2
+      - name: Validate fail-closed deployment target
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GCP_PROJECT GCP_REGION SERVICE_NAME; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing required APEX-Stream deployment setting: $name" >&2
+              exit 2
+            fi
+          done
+          if [[ "$SERVICE_NAME" == "apex" ]]; then
+            echo "Refusing to deploy APEX-Stream into the main APEX Cloud Run service 'apex'." >&2
+            exit 3
+          fi
+          if [[ "$DEPLOY_ENABLED" != "true" ]]; then
+            echo "APEX-Stream deployment is not explicitly enabled." >&2
+            exit 3
+          fi
+
+      - uses: google-github-actions/auth@v3
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Verify exact existing service
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          service_json="$(gcloud run services describe "$SERVICE_NAME" \
+            --project "$GCP_PROJECT" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --format=json)" || {
+              echo "Configured APEX-Stream Cloud Run service does not exist. This workflow never creates services." >&2
+              exit 4
+            }
+          ready="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+          current_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<<"$service_json")"
+          if [[ -z "$ready" || -z "$current_image" ]]; then
+            echo "Configured service is not a verified Ready Cloud Run target." >&2
+            exit 4
+          fi
+          echo "Verified existing APEX-Stream target: $GCP_PROJECT / $GCP_REGION / $SERVICE_NAME"
 
       - name: Configure Docker auth for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
 
-      - name: Build and push container image
+      - name: Build and push immutable image
         id: build
+        shell: bash
         run: |
-          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/orchestrator"
-          TAG=${{ needs.test.outputs.image_tag }}
-          docker build \
-            --file services/orchestrator/Dockerfile \
-            --tag "$IMAGE:$TAG" \
-            --tag "$IMAGE:latest" \
-            .
-          docker push "$IMAGE:$TAG"
-          docker push "$IMAGE:latest"
-          echo "image=$IMAGE:$TAG" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          IMAGE="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT}/${ARTIFACT_REPO}/orchestrator:${{ needs.test.outputs.image_tag }}"
+          docker build --file services/orchestrator/Dockerfile --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
-      - name: Deploy to Cloud Run
-        id: deploy
+      - name: Update only the existing Cloud Run service
+        shell: bash
         run: |
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
-            --image ${{ steps.build.outputs.image }} \
-            --project=${{ env.GCP_PROJECT }} \
-            --region=${{ env.GCP_REGION }} \
-            --port=8080 \
-            --allow-unauthenticated \
-            --min-instances=1 \
-            --max-instances=10 \
-            --memory=2Gi \
-            --cpu=2 \
-            --timeout=300 \
-            --no-traffic \
-            --tag=canary-${{ needs.test.outputs.image_tag }} \
-            --update-env-vars "EVENT_BUS_NAME=apex-events,QUEUE_URL_ARIA=https://sqs.us-east-1.amazonaws.com/000000000000/apex-aria,QUEUE_URL_ATLAS=https://sqs.us-east-1.amazonaws.com/000000000000/apex-atlas,QUEUE_URL_SENTINEL=https://sqs.us-east-1.amazonaws.com/000000000000/apex-sentinel,QUEUE_URL_ARCHIVIST=https://sqs.us-east-1.amazonaws.com/000000000000/apex-archivist,QUEUE_URL_WARDEN=https://sqs.us-east-1.amazonaws.com/000000000000/apex-warden,EVIDENCE_BUCKET=apex-evidence,MEMORY_TABLE=apex-memory,KMS_KEY_ID=alias/apex-key,COGNITO_USER_POOL_ID=us-east-1_000000000,COGNITO_CLIENT_ID=0000000000000000000,DATABASE_CA_REQUIRED=false" \
-            --format=json > deploy-output.json
-          echo "Deployed new revision (no traffic yet)"
+          set -euo pipefail
+          gcloud run services update "$SERVICE_NAME" \
+            --project "$GCP_PROJECT" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --image "${{ steps.build.outputs.image }}" \
+            --update-env-vars "APEX_VERSION=$GITHUB_SHA,APEX_ENV=prod" \
+            --quiet
 
-      - name: Route traffic to new revision
+      - name: Verify Ready revision and live SHA
+        shell: bash
         run: |
-          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
-            --project=${{ env.GCP_PROJECT }} \
-            --region=${{ env.GCP_REGION }} \
-            --to-latest
-          echo "Traffic routed to latest revision"
-
-      - name: Verify deployment
-        run: |
-          sleep 20
-          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
-            --project=${{ env.GCP_PROJECT }} \
-            --region=${{ env.GCP_REGION }} \
-            --format='value(status.url)')
-          echo "Service URL: $URL"
-          for i in 1 2 3 4 5; do
-            if curl -sf "$URL/health" > /dev/null 2>&1; then
-              echo "Health check passed on attempt $i"
-              curl -sf "$URL/health" | head -10
-              exit 0
+          set -euo pipefail
+          for attempt in {1..30}; do
+            service_json="$(gcloud run services describe "$SERVICE_NAME" \
+              --project "$GCP_PROJECT" \
+              --region "$GCP_REGION" \
+              --platform managed \
+              --format=json)"
+            created="$(jq -r '.status.latestCreatedRevisionName // empty' <<<"$service_json")"
+            ready="$(jq -r '.status.latestReadyRevisionName // empty' <<<"$service_json")"
+            if [[ -n "$created" && "$created" == "$ready" ]]; then
+              break
             fi
-            echo "Attempt $i: not ready yet, waiting..."
-            sleep 10
+            sleep 5
           done
-          echo "::error::Health check failed after 5 attempts"
-          exit 1
+
+          URL="$(gcloud run services describe "$SERVICE_NAME" \
+            --project "$GCP_PROJECT" \
+            --region "$GCP_REGION" \
+            --platform managed \
+            --format='value(status.url)')"
+          body="$(curl -fsS --retry 5 --retry-delay 3 --max-time 20 "${URL%/}/health")"
+          live_sha="$(jq -r '.version // empty' <<<"$body")"
+          if [[ "$live_sha" != "$GITHUB_SHA" ]]; then
+            echo "Live APEX-Stream SHA mismatch. expected=$GITHUB_SHA actual=$live_sha" >&2
+            exit 5
+          fi
+          echo "APEX-Stream release verified at $URL with SHA $live_sha"
