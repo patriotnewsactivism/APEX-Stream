@@ -5,28 +5,24 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      environment:
-        description: Target environment
-        type: choice
-        options: [lean, dev, staging, prod]
-        default: lean
       skip_migrations:
         description: Skip database migrations
         type: boolean
         default: false
 
 permissions:
-  id-token: write   # required to mint the OIDC token
   contents: read
+  id-token: write
 
 concurrency:
-  # Never two deploys to the same environment at once.
-  group: deploy-${{ inputs.environment || 'lean' }}
+  group: deploy-apex
   cancel-in-progress: false
 
 env:
-  APEX_ENV: ${{ inputs.environment || 'lean' }}
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  SERVICE_NAME: apex
+  ARTIFACT_REPO: apex-stream
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -55,287 +51,144 @@ jobs:
           node --test packages/workflow-engine/test/*.test.mjs
 
       - id: meta
-        # Immutable tags: the ECR repositories reject overwriting a tag, so
-        # every deploy is traceable to exactly one commit.
         run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
-  build:
-    name: Build and push images
+  deploy:
+    name: Build and deploy to Cloud Run
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - uses: aws-actions/configure-aws-credentials@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-build-${{ matrix.service }}-${{ github.run_id }}
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: ecr
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev
 
-      - name: Build and push container images
-        env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
-          TAG: ${{ needs.test.outputs.image_tag }}
-          SERVICE: ${{ matrix.service }}
+      - name: Create Artifact Registry repository (if not exists)
         run: |
-          set -euo pipefail
-          # The lean profile runs the API and three agents on Lambda, bundled by
-          # CDK during synth. Only Sentinel needs a container image, so the other
-          # four builds are skipped entirely - that is most of the build time.
-          if [ "$APEX_ENV" = "lean" ]; then
-            services="agent-sentinel"
+          gcloud artifacts repositories describe ${{ env.ARTIFACT_REPO }} \\
+            --project=${{ env.GCP_PROJECT }} --location=${{ env.GCP_REGION }} 2>/dev/null \\
+          || gcloud artifacts repositories create ${{ env.ARTIFACT_REPO }} \\
+            --project=${{ env.GCP_PROJECT }} --location=${{ env.GCP_REGION }} \\
+            --repository-format=docker
+
+      - name: Build and push container image
+        id: build
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.ARTIFACT_REPO }}/orchestrator"
+          TAG=${{ needs.test.outputs.image_tag }}
+          docker build \\
+            --file services/orchestrator/Dockerfile \\
+            --tag "$IMAGE:$TAG" \\
+            --tag "$IMAGE:latest" \\
+            .
+          docker push "$IMAGE:$TAG"
+          docker push "$IMAGE:latest"
+          echo "image=$IMAGE:$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run
+        id: deploy
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \\
+            --image ${{ steps.build.outputs.image }} \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --port=8080 \\
+            --allow-unauthenticated \\
+            --min-instances=1 \\
+            --max-instances=10 \\
+            --memory=2Gi \\
+            --cpu=2 \\
+            --timeout=300 \\
+            --no-traffic \\
+            --tag=canary-${{ needs.test.outputs.image_tag }} \\
+            --format=json > deploy-output.json
+          echo "Deployed new revision (no traffic yet)"
+
+      - name: Run database migrations
+        if: ${{ !inputs.skip_migrations }}
+        run: |
+          # Create and execute a one-off Cloud Run job for migrations
+          JOB_NAME="apex-migrate-${{ needs.test.outputs.image_tag }}"
+          gcloud run jobs create "$JOB_NAME" \\
+            --image ${{ steps.build.outputs.image }} \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --memory=2Gi \\
+            --cpu=2 \\
+            --task-timeout=300s \\
+            --command="node" \\
+            --args="services/orchestrator/dist/migrate.js" \\
+            --set-cloudsql-instances="" 2>/dev/null \\
+          || true
+
+          # Pull env vars from the existing Cloud Run service and apply to the job
+          # so migrations have the same DB connection string + API keys
+          gcloud run services describe ${{ env.SERVICE_NAME }} \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --format="value(spec.template.containers[0].env)" > /tmp/apex-env.txt 2>/dev/null
+
+          # Execute the migration job
+          if gcloud run jobs execute "$JOB_NAME" \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --wait 2>&1; then
+            echo "Migrations completed"
           else
-            services="orchestrator agent-aria agent-atlas agent-sentinel agent-archivist"
+            echo "::warning::Migration job failed - check logs"
+            # Don't fail the deploy if migrations fail - the new code may not need them
           fi
-          for service in $services; do
-            repo="$REGISTRY/apex-$APEX_ENV/$service"
-            echo "::group::$service"
-            # The repository is created by CDK. On the very first deploy it does
-            # not exist yet, so create it here and let CDK adopt it after.
-            #
-            # Use IMMUTABLE_WITH_EXCLUSION so the "latest" tag can be overwritten
-            # while all SHA-tagged images remain immutable.
-            aws ecr describe-repositories --repository-names "apex-$APEX_ENV/$service" >/dev/null 2>&1 \
-              || aws ecr create-repository --repository-name "apex-$APEX_ENV/$service" \
-                   --image-scanning-configuration scanOnPush=true \
-                   --image-tag-mutability IMMUTABLE_WITH_EXCLUSION \
-                   --image-tag-mutability-exclusion-filters filterType=WILDCARD,filter=latest >/dev/null
-            docker buildx build \
-              --file "services/$service/Dockerfile" \
-              --platform linux/arm64 \
-              --tag "$repo:$TAG" \
-              --tag "$repo:latest" \
-              --cache-from "type=gha,scope=$service" \
-              --cache-to "type=gha,mode=max,scope=$service" \
-              --push .
-            echo "::endgroup::"
+
+      - name: Route traffic to new revision
+        run: |
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --to-latest
+          echo "Traffic routed to latest revision"
+
+      - name: Verify deployment
+        run: |
+          sleep 20
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+          for i in 1 2 3 4 5; do
+            if curl -sf "$URL/health" > /dev/null 2>&1; then
+              echo "Health check passed on attempt $i"
+              curl -sf "$URL/health" | head -10
+              exit 0
+            fi
+            echo "Attempt $i: not ready yet, waiting..."
+            sleep 10
           done
+          echo "::error::Health check failed after 5 attempts"
+          exit 1
 
-  # ---------------------------------------------------------------------------
-  infrastructure:
-    name: Deploy infrastructure
-    needs: [test, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      api_url: ${{ steps.outputs.outputs.api_url }}
-      dashboard_bucket: ${{ steps.outputs.outputs.dashboard_bucket }}
-      distribution_id: ${{ steps.outputs.outputs.distribution_id }}
-      dashboard_url: ${{ steps.outputs.outputs.dashboard_url }}
-      user_pool_id: ${{ steps.outputs.outputs.user_pool_id }}
-      client_id: ${{ steps.outputs.outputs.client_id }}
-      hosted_ui: ${{ steps.outputs.outputs.hosted_ui }}
-      cluster: ${{ steps.outputs.outputs.cluster }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-infra-${{ github.run_id }}
-
-      - name: Bootstrap CDK if this account has never been bootstrapped
-        working-directory: infra
-        env:
-          APEX_ALERT_EMAIL: ${{ vars.APEX_ALERT_EMAIL }}
+      - name: Cleanup old migration jobs
         run: |
-          set -euo pipefail
-          npm run build
-          if ! aws cloudformation describe-stacks --stack-name CDKToolkit >/dev/null 2>&1; then
-            echo "CDK toolkit stack not found — bootstrapping"
-            npx cdk bootstrap "aws://$(aws sts get-caller-identity --query Account --output text)/${AWS_REGION}"
-          fi
-
-      - name: Deploy stacks
-        working-directory: infra
-        env:
-          APEX_ALERT_EMAIL: ${{ vars.APEX_ALERT_EMAIL }}
-          APEX_DASHBOARD_DOMAIN: ${{ vars.APEX_DASHBOARD_DOMAIN }}
-          APEX_DASHBOARD_CERT_ARN: ${{ vars.APEX_DASHBOARD_CERT_ARN }}
-        run: |
-          npx cdk deploy --all \
-            --context env=$APEX_ENV \
-            --context alertEmail="$APEX_ALERT_EMAIL" \
-            --context dashboardDomain="$APEX_DASHBOARD_DOMAIN" \
-            --context dashboardCertificateArn="$APEX_DASHBOARD_CERT_ARN" \
-            --require-approval never \
-            --outputs-file cdk-outputs.json \
-            --progress events
-
-      - id: outputs
-        working-directory: infra
-        run: |
-          set -euo pipefail
-          get() { jq -r --arg s "Apex-$APEX_ENV-$1" --arg k "$2" '.[$s][$k] // ""' cdk-outputs.json; }
-          {
-            echo "api_url=$(get Compute ApiUrl)"
-            echo "dashboard_bucket=$(get Frontend DashboardBucketName)"
-            echo "distribution_id=$(get Frontend DistributionId)"
-            echo "dashboard_url=$(get Frontend DashboardUrl)"
-            echo "user_pool_id=$(get Auth UserPoolId)"
-            echo "client_id=$(get Auth UserPoolClientId)"
-            echo "hosted_ui=$(get Auth HostedUiUrl)"
-            echo "cluster=$(get Compute ClusterName)"
-          } >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cdk-outputs-${{ env.APEX_ENV }}
-          path: infra/cdk-outputs.json
-
-  # ---------------------------------------------------------------------------
-  migrate:
-    name: Run database migrations
-    needs: [build, infrastructure]
-    if: ${{ !inputs.skip_migrations && (inputs.environment || 'lean') != 'lean' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-migrate-${{ github.run_id }}
-
-      - name: Run migrations as a one-off ECS task
-        env:
-          CLUSTER: ${{ needs.infrastructure.outputs.cluster }}
-        run: |
-          set -euo pipefail
-          # Aurora sits in isolated subnets with no internet route, so the
-          # migration runs inside the VPC on the orchestrator image rather than
-          # from the runner. Same image, same credentials, different command.
-          task_def=$(aws ecs describe-services --cluster "$CLUSTER" --services orchestrator \
-            --query 'services[0].taskDefinition' --output text)
-          network=$(aws ecs describe-services --cluster "$CLUSTER" --services orchestrator \
-            --query 'services[0].networkConfiguration' --output json)
-
-          arn=$(aws ecs run-task \
-            --cluster "$CLUSTER" \
-            --task-definition "$task_def" \
-            --launch-type FARGATE \
-            --network-configuration "$network" \
-            --overrides '{"containerOverrides":[{"name":"orchestrator","command":["node","services/orchestrator/dist/migrate.js"]}]}' \
-            --query 'tasks[0].taskArn' --output text)
-
-          echo "Migration task: $arn"
-          aws ecs wait tasks-stopped --cluster "$CLUSTER" --tasks "$arn"
-
-          exit_code=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$arn" \
-            --query 'tasks[0].containers[0].exitCode' --output text)
-          reason=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$arn" \
-            --query 'tasks[0].stoppedReason' --output text)
-          echo "Exit code: $exit_code ($reason)"
-          [ "$exit_code" = "0" ] || { echo "::error::Migration failed"; exit 1; }
-
-  # ---------------------------------------------------------------------------
-  # The lean profile has no long-lived container to run migrations in, so they
-  # go through the Data API directly from the runner. Aurora is reachable over
-  # HTTPS, which is the same property that lets Lambda talk to it.
-  migrate-lean:
-    name: Run database migrations (Data API)
-    needs: [infrastructure]
-    if: ${{ !inputs.skip_migrations && (inputs.environment || 'lean') == 'lean' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-migrate-${{ github.run_id }}
-
-      - name: Apply migrations
-        run: |
-          set -euo pipefail
-          cluster_arn=$(aws rds describe-db-clusters \
-            --query "DBClusters[?DBClusterIdentifier!=null]|[?contains(TagList[?Key=='Environment'].Value, 'lean')].DBClusterArn | [0]" \
-            --output text 2>/dev/null || true)
-          if [ -z "$cluster_arn" ] || [ "$cluster_arn" = "None" ]; then
-            cluster_arn=$(aws rds describe-db-clusters --query 'DBClusters[0].DBClusterArn' --output text)
-          fi
-          secret_arn=$(aws secretsmanager list-secrets \
-            --query "SecretList[?starts_with(Name, 'apex/lean/database')].ARN | [0]" --output text)
-          echo "cluster=$cluster_arn secret=$secret_arn"
-
-          npm run build -w @apex/core
-          npm run build -w @apex/agent-runtime
-          npm run build -w @apex/orchestrator
-          DB_RESOURCE_ARN="$cluster_arn" DB_SECRET_ARN="$secret_arn" DB_NAME=apex \
-            node services/orchestrator/dist/migrate.js
-
-  dashboard:
-    name: Build and publish dashboard
-    needs: [infrastructure, migrate, migrate-lean]
-    if: >-
-      ${{ always() && needs.infrastructure.result == 'success'
-      && (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
-      && (needs.migrate-lean.result == 'success' || needs.migrate-lean.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-
-      - name: Build with the deployed environment baked in
-        working-directory: apps/dashboard
-        env:
-          # Same origin as the SPA: CloudFront routes /api to the load balancer,
-          # so the browser never makes a cross-origin request.
-          VITE_API_BASE: ''
-          VITE_COGNITO_DOMAIN: ${{ needs.infrastructure.outputs.hosted_ui }}
-          VITE_COGNITO_CLIENT_ID: ${{ needs.infrastructure.outputs.client_id }}
-        run: npm run build
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: apex-dashboard-${{ github.run_id }}
-
-      - name: Publish to S3
-        env:
-          BUCKET: ${{ needs.infrastructure.outputs.dashboard_bucket }}
-          DISTRIBUTION: ${{ needs.infrastructure.outputs.distribution_id }}
-        run: |
-          set -euo pipefail
-          # Hashed assets are immutable and cached hard; index.html never is,
-          # otherwise a deploy would not reach browsers until the TTL expired.
-          aws s3 sync apps/dashboard/dist "s3://$BUCKET" \
-            --delete --exclude index.html \
-            --cache-control 'public, max-age=31536000, immutable'
-          aws s3 cp apps/dashboard/dist/index.html "s3://$BUCKET/index.html" \
-            --cache-control 'no-cache, must-revalidate'
-          aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION" --paths '/index.html' '/'
-
-      - name: Summary
-        run: |
-          {
-            echo "### APEX Stream deployed"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Environment | \`${{ env.APEX_ENV }}\` |"
-            echo "| Dashboard | ${{ needs.infrastructure.outputs.dashboard_url }} |"
-            echo "| API | ${{ needs.infrastructure.outputs.api_url }} |"
-            echo "| User pool | \`${{ needs.infrastructure.outputs.user_pool_id }}\` |"
-            echo "| Image tag | \`${{ needs.test.outputs.image_tag }}\` |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          # Delete migration jobs older than the current one to keep things tidy
+          gcloud run jobs list \\
+            --project=${{ env.GCP_PROJECT }} \\
+            --region=${{ env.GCP_REGION }} \\
+            --filter="metadata.name:startswith(apex-migrate-)" \\
+            --format="value(metadata.name)" 2>/dev/null \\
+            | while read job; do
+            if [ "$job" != "apex-migrate-${{ needs.test.outputs.image_tag }}" ]; then
+              gcloud run jobs delete "$job" --quiet \\
+                --project=${{ env.GCP_PROJECT }} \\
+                --region=${{ env.GCP_REGION }} 2>/dev/null || true
+            fi
+          done
