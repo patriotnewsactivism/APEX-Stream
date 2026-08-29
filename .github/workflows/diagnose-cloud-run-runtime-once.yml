@@ -1,0 +1,45 @@
+name: Diagnose Cloud Run runtime once
+
+on:
+  push:
+    branches: [fix/cloud-run-production-hardening]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  SERVICE_NAME: apex
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Inspect existing service without secret values
+        shell: bash
+        run: |
+          set -euo pipefail
+          gcloud run services describe "$SERVICE_NAME" \
+            --project "$GCP_PROJECT" \
+            --region "$GCP_REGION" \
+            --format=json > service.json
+          jq '{
+            name:.metadata.name,
+            url:.status.url,
+            latestCreatedRevision:.status.latestCreatedRevisionName,
+            latestReadyRevision:.status.latestReadyRevisionName,
+            serviceAccount:.spec.template.spec.serviceAccountName,
+            image:.spec.template.spec.containers[0].image,
+            envNames:[.spec.template.spec.containers[0].env[]?.name],
+            secretRefs:[.spec.template.spec.containers[0].env[]? | select(.valueFrom.secretKeyRef != null) | {name:.name,secret:.valueFrom.secretKeyRef.name,key:.valueFrom.secretKeyRef.key}],
+            minScale:.metadata.annotations["autoscaling.knative.dev/minScale"],
+            maxScale:.metadata.annotations["autoscaling.knative.dev/maxScale"]
+          }' service.json
