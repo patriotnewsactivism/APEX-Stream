@@ -7,7 +7,6 @@ import { z } from 'zod';
  */
 const schema = z.object({
   APEX_ENV: z.enum(['dev', 'staging', 'prod']).default('dev'),
-  AWS_REGION: z.string().default('us-east-1'),
   PORT: z.coerce.number().int().default(8080),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
@@ -19,9 +18,6 @@ const schema = z.object({
 
   EVIDENCE_BUCKET: z.string().min(1),
   GCP_KMS_KEY_NAME: z.string().min(1),
-
-  COGNITO_USER_POOL_ID: z.string().min(1),
-  COGNITO_CLIENT_ID: z.string().min(1),
 
   NOTIFY_SNS_TOPIC_ARN: z.string().optional(),
   NOTIFY_FROM_EMAIL: z.string().email().optional(),

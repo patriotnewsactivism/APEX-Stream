@@ -1,7 +1,7 @@
 /**
  * API client.
  *
- * Every call carries the Cognito access token. A 401 clears the session and
+ * Every call carries the Identity Platform ID token. A 401 clears the session and
  * bounces to sign-in rather than leaving the UI in a half-authenticated state
  * where some panels load and others silently fail.
  */
