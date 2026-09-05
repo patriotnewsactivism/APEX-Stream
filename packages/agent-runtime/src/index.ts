@@ -6,4 +6,4 @@ export * from './store.js';
 export * from './kms.js';
 export * from './sql.js';
 export * from './sql-pg.js';
-export * from './rds-ca.js';
+export * from './db-ca.js';

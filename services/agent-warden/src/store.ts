@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { loadRdsCaBundle } from '@apex/agent-runtime';
+import { loadDatabaseCaBundle } from '@apex/agent-runtime';
 import type { Classification } from './classify.js';
 
 /**
@@ -12,7 +12,7 @@ import type { Classification } from './classify.js';
  * `reply_drafts.status` beyond creating a pending row — approving is the
  * orchestrator's job, and keeping that out of reach here is the point.
  *
- * `loadRdsCaBundle` itself lives in `@apex/agent-runtime` (used by every
+ * `loadDatabaseCaBundle` itself lives in `@apex/agent-runtime` (used by every
  * service's Postgres connection) rather than being copy-pasted here.
  */
 
@@ -53,10 +53,7 @@ export class WardenStore {
       ssl:
         process.env.DATABASE_CA_REQUIRED === 'false'
           ? undefined
-          : (() => {
-              const ca = loadRdsCaBundle();
-              return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
-            })(),
+          : { rejectUnauthorized: true, ca: loadDatabaseCaBundle(process.env.DATABASE_CA_BUNDLE_PATH) },
       application_name: 'apex-warden',
     });
   }

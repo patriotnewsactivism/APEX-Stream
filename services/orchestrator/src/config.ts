@@ -11,12 +11,10 @@ const schema = z.object({
   PORT: z.coerce.number().int().default(8080),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
-  // Containers set DATABASE_URL; the lean profile sets the Data API triple.
-  // One of the two must be present, which is checked after parsing.
-  DATABASE_URL: z.string().optional(),
+  DATABASE_URL: z.string().min(1),
   DATABASE_CA_REQUIRED: z.coerce.boolean().default(true),
-  DB_RESOURCE_ARN: z.string().optional(),
-  DB_SECRET_ARN: z.string().optional(),
+  /** Only needed for a Postgres host whose cert doesn't chain to a public CA. */
+  DATABASE_CA_BUNDLE_PATH: z.string().optional(),
   DB_NAME: z.string().default('apex'),
 
   EVIDENCE_BUCKET: z.string().min(1),
@@ -47,13 +45,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid configuration — refusing to start:\n${detail}`);
   }
   const value = parsed.data;
-  const hasDataApi = Boolean(value.DB_RESOURCE_ARN && value.DB_SECRET_ARN);
-  if (!value.DATABASE_URL && !hasDataApi) {
-    throw new Error(
-      'Invalid configuration - refusing to start:\n  set DATABASE_URL, or DB_RESOURCE_ARN and DB_SECRET_ARN for Data API access',
-    );
-  }
-
   cached = Object.freeze(value);
   return cached;
 }
