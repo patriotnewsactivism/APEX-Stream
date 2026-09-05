@@ -21,9 +21,10 @@ export interface RoleDefinition {
 
 /**
  * Note on evidence deletion: nobody, including the owner, is granted
- * `evidence:delete`. Evidence lives in an Object Lock bucket in compliance
- * mode, so the API could not honour a delete anyway — encoding that here
- * keeps the app layer honest about what the storage layer will actually do.
+ * `evidence:delete`. Evidence is stored under GCS Object Retention Lock in
+ * compliance mode, so the API could not honour a delete anyway — encoding
+ * that here keeps the app layer honest about what the storage layer will
+ * actually do.
  */
 export const ROLE_DEFINITIONS: Record<Role, RoleDefinition> = {
   owner: {

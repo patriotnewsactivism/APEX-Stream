@@ -156,7 +156,7 @@ export class Sentinel extends Agent<SentinelPayload, { segments: number; anomali
       metadata: {
         durationSeconds: segment.durationSeconds,
         wordsPerMinute: Math.round(wordsPerMinute),
-        audioS3Key: segment.audioS3Key ?? null,
+        audioStorageKey: segment.audioStorageKey ?? null,
         confidence: segment.confidence,
       },
       signals,
@@ -170,7 +170,7 @@ export class Sentinel extends Agent<SentinelPayload, { segments: number; anomali
       await ctx.events.publish('anomaly.detected', 'sentinel', {
         anomalyId, observationId, sourceId: source.id, runId,
         score: result.score, band: result.band, confidence: result.confidence,
-        audioS3Key: segment.audioS3Key ?? null,
+        audioStorageKey: segment.audioStorageKey ?? null,
         requiresArchive: true,
       });
     }

@@ -305,7 +305,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
       action: 'evidence.delete_denied',
       resourceType: 'evidence',
       resourceId: id,
-      detail: { reason: 'evidence is write-once under Object Lock' },
+      detail: { reason: 'evidence is write-once under a storage-level retention lock' },
       ipAddress: request.ip,
       traceId: request.id,
       outcome: 'denied',
@@ -313,7 +313,7 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
     return reply.code(403).send({
       error: 'immutable',
       message:
-        'Evidence is stored under S3 Object Lock in compliance mode and cannot be deleted by anyone, including account administrators, before its retention date.',
+        'Evidence is stored under a locked retention policy and cannot be deleted by anyone, including account administrators, before its retention date.',
     });
   });
 

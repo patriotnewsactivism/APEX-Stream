@@ -91,7 +91,7 @@ const KINDS: KindSpec[] = [
     label: 'Live stream (audio)',
     agent: 'sentinel',
     does:
-      'Sentinel holds the audio stream open, cuts it into segments, archives each segment to S3, and ' +
+      'Sentinel holds the audio stream open, cuts it into segments, archives each segment to cloud storage, and ' +
       'transcribes it — only once a transcriber is configured. It captures audio, not chat.',
     polled: false,
     urlHint: 'https://example.com/live/stream.m3u8',

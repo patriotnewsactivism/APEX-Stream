@@ -8,9 +8,9 @@ import type { SqlExecutor } from './sql.js';
  * signals and anomalies. They cannot read evidence, other agents' rows, or the
  * audit log - the database role backing the executor is scoped to match.
  *
- * Store is intentionally transport-agnostic. Container deployments use the
- * Postgres executor while the lean Lambda profile uses the RDS Data API; both
- * implement SqlExecutor so the business queries remain identical.
+ * Store depends only on SqlExecutor, not on how the connection is made, so
+ * the business queries here are insulated from the one thing that has
+ * actually changed underneath them (see sql.ts).
  */
 export class Store {
   constructor(private readonly db: SqlExecutor) {}
@@ -238,9 +238,9 @@ export class Store {
     observationId: string;
     capturedBy: string;
     capturedAt: string;
-    s3Bucket: string;
-    s3Key: string;
-    s3VersionId: string | null;
+    storageBucket: string;
+    storageKey: string;
+    storageGeneration: string | null;
     sha256: string;
     bytes: number;
     contentType: string;
@@ -250,7 +250,7 @@ export class Store {
   }): Promise<void> {
     await this.db.query(
       `INSERT INTO evidence
-         (id, anomaly_id, observation_id, captured_by, captured_at, s3_bucket, s3_key, s3_version_id,
+         (id, anomaly_id, observation_id, captured_by, captured_at, storage_bucket, storage_key, storage_generation,
           sha256, bytes, content_type, retain_until, manifest_sha256, chain_of_custody)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        ON CONFLICT (id) DO NOTHING`,
@@ -260,9 +260,9 @@ export class Store {
         record.observationId,
         record.capturedBy,
         record.capturedAt,
-        record.s3Bucket,
-        record.s3Key,
-        record.s3VersionId,
+        record.storageBucket,
+        record.storageKey,
+        record.storageGeneration,
         record.sha256,
         record.bytes,
         record.contentType,

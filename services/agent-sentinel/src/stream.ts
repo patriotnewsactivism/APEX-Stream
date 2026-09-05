@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Storage, type Bucket } from '@google-cloud/storage';
 import type { Logger } from '@apex/core';
 
 /**
@@ -7,13 +7,14 @@ import type { Logger } from '@apex/core';
  *
  * Pulls an HLS/HTTP audio stream, buffers it into fixed-length segments, and
  * yields transcripts. Transcription is behind a small interface so the
- * deployment can choose Amazon Transcribe streaming, a self-hosted Whisper
- * container, or (in dev) a no-op — swapping providers must not require
- * touching capture or scoring.
+ * deployment can choose a hosted streaming transcription API, a self-hosted
+ * Whisper container, or (in dev) a no-op — swapping providers must not
+ * require touching capture or scoring.
  *
- * Segments are written to S3 before they are transcribed. If transcription
- * fails, the audio still exists and can be reprocessed; the reverse is not
- * recoverable, and for evidence work the audio is the artefact that matters.
+ * Segments are written to cloud storage before they are transcribed. If
+ * transcription fails, the audio still exists and can be reprocessed; the
+ * reverse is not recoverable, and for evidence work the audio is the
+ * artefact that matters.
  */
 
 export interface TranscriptSegment {
@@ -21,7 +22,7 @@ export interface TranscriptSegment {
   startedAt: string;
   durationSeconds: number;
   confidence: number;
-  audioS3Key: string | null;
+  audioStorageKey: string | null;
 }
 
 export interface Transcriber {
@@ -35,7 +36,7 @@ export interface StreamSessionOptions {
   log: Logger;
   transcriber?: Transcriber;
   bucket?: string;
-  s3?: S3Client;
+  storage?: Storage;
 }
 
 /** Dev/default transcriber. Returns nothing rather than inventing text. */
@@ -47,14 +48,13 @@ class NullTranscriber implements Transcriber {
 
 export class StreamSession {
   private controller: AbortController | null = null;
-  private readonly s3: S3Client;
-  private readonly bucket: string;
+  private readonly bucket: Bucket | null;
   private readonly transcriber: Transcriber;
   lastError: string | null = null;
 
   constructor(private readonly options: StreamSessionOptions) {
-    this.s3 = options.s3 ?? new S3Client({});
-    this.bucket = options.bucket ?? process.env.EVIDENCE_BUCKET ?? '';
+    const bucketName = options.bucket ?? process.env.EVIDENCE_BUCKET ?? '';
+    this.bucket = bucketName ? (options.storage ?? new Storage()).bucket(bucketName) : null;
     this.transcriber = options.transcriber ?? new NullTranscriber();
   }
 
@@ -97,7 +97,7 @@ export class StreamSession {
           const startedAt = segmentStart.toISOString();
           segmentStart = new Date();
 
-          const audioS3Key = await this.persist(audio, startedAt).catch((err) => {
+          const audioStorageKey = await this.persist(audio, startedAt).catch((err) => {
             log.warn('segment upload failed', { error: err });
             return null;
           });
@@ -110,7 +110,7 @@ export class StreamSession {
             });
 
           if (text.trim()) {
-            yield { text: text.trim(), startedAt, durationSeconds: segmentSeconds, confidence, audioS3Key };
+            yield { text: text.trim(), startedAt, durationSeconds: segmentSeconds, confidence, audioStorageKey };
           }
         }
       } catch (err) {
@@ -133,16 +133,13 @@ export class StreamSession {
   private async persist(audio: Buffer, startedAt: string): Promise<string | null> {
     if (!this.bucket) return null;
     const key = `streams/${startedAt.slice(0, 10)}/${randomUUID()}.pcm`;
-    await this.s3.send(
-      new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: key,
-        Body: audio,
-        ContentType: 'audio/L16',
-        ServerSideEncryption: 'aws:kms',
-        Metadata: { capturedAt: startedAt, capturedBy: 'sentinel' },
-      }),
-    );
+    await this.bucket.file(key, { kmsKeyName: process.env.GCP_KMS_KEY_NAME }).save(audio, {
+      resumable: false,
+      metadata: {
+        contentType: 'audio/L16',
+        metadata: { capturedAt: startedAt, capturedBy: 'sentinel' },
+      },
+    });
     return key;
   }
 

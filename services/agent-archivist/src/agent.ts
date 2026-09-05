@@ -6,11 +6,12 @@ import { EvidenceVault } from './vault.js';
  * Archivist — evidence custody.
  *
  * Everything Archivist writes is written once and cannot be deleted before its
- * retention date, by anyone, including the account root. That constraint is the
- * whole point: evidence that an administrator can quietly remove is not
- * evidence, it is a copy. Object Lock in compliance mode enforces it at the
- * storage layer, and the API and RBAC layers refuse deletion so the system
- * never implies a capability the bucket would reject anyway.
+ * retention date, by anyone, including the project owner. That constraint is
+ * the whole point: evidence that an administrator can quietly remove is not
+ * evidence, it is a copy. GCS Object Retention Lock in compliance mode
+ * enforces it at the storage layer, and the API and RBAC layers refuse
+ * deletion so the system never implies a capability the bucket would reject
+ * anyway.
  *
  * Each capture produces a manifest recording what was fetched, when, from
  * where, by which agent, and the SHA-256 of the exact bytes stored. The
