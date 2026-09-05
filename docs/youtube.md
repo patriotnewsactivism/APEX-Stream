@@ -45,6 +45,14 @@ client. This takes about ten minutes and only has to be done once.
 
 ### 2. Give them to the deployment
 
+> **HISTORICAL — the commands below are for the retired AWS CDK/ECS
+> deployment** (the CDK stack that created the named Secrets Manager entry and
+> the `ecs update-service` restart no longer exist in this repository).
+> APEX-Stream is migrating to Google Cloud Run; until a Cloud-Run-equivalent
+> secret-injection path is documented in `docs/PRODUCTION_OPERATIONS.md`, get
+> the exact current mechanism from the team rather than assuming these AWS
+> commands still apply.
+
 The CDK creates an empty Secrets Manager secret named
 `apex/<env>/youtube-oauth`. Fill it in:
 

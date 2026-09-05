@@ -1,5 +1,14 @@
 # Architecture
 
+> **HISTORICAL — describes the retired AWS CDK/ECS architecture.** APEX-Stream
+> is migrating to Google Cloud Run (see `README.md` and
+> `docs/PRODUCTION_OPERATIONS.md` for current, verified state). The `infra/`
+> CDK tree this document refers to has been removed from the repository.
+> Product-level behavior described below (agent responsibilities, data
+> contracts, scoring/workflow semantics) may still apply; infrastructure
+> specifics (CDK stack names, Fargate/Aurora/Cognito/CloudFront details) do
+> not reflect the current or target deployment.
+
 ## The shape of it
 
 ```

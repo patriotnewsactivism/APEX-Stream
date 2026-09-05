@@ -1,5 +1,15 @@
 # Security model
 
+> **HISTORICAL — describes the retired AWS security architecture** (KMS CMKs,
+> Cognito, VPC three-tier network, CDK-managed IAM). APEX-Stream is migrating
+> to Google Cloud Run; see `README.md` and `docs/PRODUCTION_OPERATIONS.md` for
+> current, verified state. The threat model, RBAC design (deny-wins, nobody
+> holds `evidence:delete`), and audit hash-chain concepts below remain the
+> intended design — the specific AWS services implementing them are being
+> replaced, one subsystem at a time, and dispatch/auth/evidence storage still
+> run on the AWS services described here as of this writing (see
+> `docs/PRODUCTION_OPERATIONS.md` for exactly which).
+
 ## Encryption
 
 **At rest.** Two customer-managed KMS keys, both rotating annually: `data`

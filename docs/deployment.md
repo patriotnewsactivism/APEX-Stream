@@ -1,5 +1,11 @@
 # Deployment
 
+> **HISTORICAL — describes the retired AWS CDK deployment path** (the 8-stack
+> `cdk deploy --all`, `infra/bootstrap/github-oidc.yaml`, `infra/lib/config.ts`
+> cost profiles). That `infra/` tree has been removed from this repository.
+> APEX-Stream now deploys to Google Cloud Run via `.github/workflows/deploy.yml`;
+> see `README.md` and `docs/PRODUCTION_OPERATIONS.md` for the current process.
+
 Everything here is **deployable, not deployed**. No AWS resources exist yet.
 Deployment is entirely GitHub-Actions-driven via OIDC — no AWS access keys are
 ever stored in this repo or on your machine.
