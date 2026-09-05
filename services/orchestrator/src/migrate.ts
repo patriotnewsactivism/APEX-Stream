@@ -8,10 +8,10 @@ import { rootLogger } from '@apex/core';
 /**
  * Migration runner.
  *
- * Runs as a one-off ECS task on the orchestrator image, because Aurora lives in
- * isolated subnets with no route to the internet — a CI runner cannot reach it,
- * and opening a path so it could would be a worse trade than reusing the image
- * that already has network access and credentials.
+ * Runs as a one-off job using the orchestrator's own image, so it reaches the
+ * database over whatever network path the orchestrator itself uses — a CI
+ * runner has no such path, and opening one just for migrations would be a
+ * worse trade than reusing an image that already has it.
  *
  * Three properties that matter more than speed here:
  *

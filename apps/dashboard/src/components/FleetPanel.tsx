@@ -14,7 +14,7 @@ export function FleetPanel({ agents, loading }: { agents: AgentStatus[]; loading
   if (agents.length === 0) {
     return (
       <div className="empty">
-        No agents are reporting. If you have just deployed, ECS tasks take a minute or two to
+        No agents are reporting. If you have just deployed, Cloud Run instances take a minute or two to
         register their first heartbeat.
       </div>
     );

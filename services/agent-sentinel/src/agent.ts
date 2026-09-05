@@ -13,9 +13,10 @@ import { StreamSession, type TranscriptSegment } from './stream.js';
 /**
  * Sentinel — live stream watch.
  *
- * The expensive agent, and the reason it runs on long-lived Fargate tasks
- * rather than Lambda: a stream watch is measured in hours, not the fifteen
- * minutes a Lambda gets. Sentinel holds the connection, buffers rolling audio,
+ * The expensive agent, and the reason it runs as a Cloud Run Job execution
+ * rather than a request-scoped service: a stream watch is measured in hours
+ * and needs a long-lived connection for its whole duration. Sentinel holds
+ * the connection, buffers rolling audio,
  * transcribes in near real time, and scores each segment as it lands.
  *
  * Two cost controls are built in rather than bolted on, because a forgotten

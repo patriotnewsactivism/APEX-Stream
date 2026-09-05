@@ -138,25 +138,25 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
 
     const runId = randomUUID();
     const result = await sentinel.launch({ ...body, runId });
-    if (!result.taskArn) return reply.code(409).send({ error: 'launch_refused', message: result.reason });
+    if (!result.executionName) return reply.code(409).send({ error: 'launch_refused', message: result.reason });
 
     await audit.append({
       actor: request.principal?.username ?? 'unknown',
       actorType: 'human',
       action: 'agent.dispatched',
       resourceType: 'watch',
-      resourceId: result.taskArn,
+      resourceId: result.executionName,
       detail: { sourceId: body.sourceId, watchMinutes: body.watchMinutes, runId },
       traceId: request.id,
       outcome: 'allowed',
     });
-    return reply.code(201).send({ runId, taskArn: result.taskArn, ...body });
+    return reply.code(201).send({ runId, executionName: result.executionName, ...body });
   });
 
-  app.delete('/api/watches/:taskArn', { preHandler: guard('agent:stop') }, async (request, reply) => {
+  app.delete('/api/watches/:executionName', { preHandler: guard('agent:stop') }, async (request, reply) => {
     if (!sentinel) return reply.code(409).send({ error: 'not_applicable' });
-    const { taskArn } = z.object({ taskArn: z.string().min(1) }).parse(request.params);
-    await sentinel.stop(decodeURIComponent(taskArn), `stopped by ${request.principal?.username ?? 'operator'}`);
+    const { executionName } = z.object({ executionName: z.string().min(1) }).parse(request.params);
+    await sentinel.stop(decodeURIComponent(executionName), `stopped by ${request.principal?.username ?? 'operator'}`);
     return reply.send({ stopped: true });
   });
 

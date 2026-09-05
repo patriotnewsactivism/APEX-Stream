@@ -6,8 +6,11 @@ import { AGENT_SCOPES } from './security/rbac.js';
  * and its own IAM role — nothing is shared, so a compromised or misbehaving
  * agent cannot read another's state or drain another's work.
  *
- * `costPerTaskMinuteUsd` figures are Fargate Spot estimates at the configured
- * task sizes and are used only for budget projection, not billing.
+ * `costPerTaskMinuteUsd` figures were calibrated against Fargate Spot pricing
+ * and are carried over unchanged now that compute has moved to Cloud Run Jobs
+ * -- Cloud Run's per-vCPU-second/per-GiB-second pricing (no spot/on-demand
+ * split) doesn't map cleanly onto these, so treat them as directional only
+ * until they're recalculated. Used only for budget projection, not billing.
  */
 export const AGENT_REGISTRY: Record<AgentId, AgentDescriptor> = {
   aria: {

@@ -20,7 +20,7 @@ import type { Dispatcher } from './dispatcher.js';
  * happening right now and you want maximum coverage while it happens. It is
  * also the single most expensive button in the product, so the design assumption
  * is that it will be pressed under time pressure by someone who is not thinking
- * about their AWS bill.
+ * about their cloud bill.
  *
  * Four rails, all mandatory and none of them overridable from the UI:
  *
@@ -29,7 +29,7 @@ import type { Dispatcher } from './dispatcher.js';
  *   2. **Wall-clock expiry.** Every run has a hard end time. Forgetting to turn
  *      Beast mode off is the expected failure mode, so it turns itself off.
  *   3. **Concurrency ceiling.** Per agent and fleet-wide, so a burst cannot
- *      scale ECS into a bill-shaped hole.
+ *      scale compute into a bill-shaped hole.
  *   4. **Single-flight.** One Beast run at a time. Two operators reacting to
  *      the same event must not double the spend.
  *
