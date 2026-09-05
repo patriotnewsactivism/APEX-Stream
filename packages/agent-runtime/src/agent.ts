@@ -12,12 +12,12 @@ import {
 } from '@apex/core';
 import { AgentMemory } from './memory.js';
 import { EventBus, TaskQueue, buildResult, isExpired, type ReceivedTask } from './bus.js';
+import type { SqlExecutor } from './sql.js';
 
 export interface AgentConfig {
   agentId: AgentId;
-  queueUrl: string;
-  memoryTableName: string;
-  eventBusName: string;
+  /** Shared Postgres executor backing this agent's queue, memory, and events. */
+  executor: SqlExecutor;
   /** Overrides the registry ceiling downward only — never upward. */
   concurrency?: number;
   version?: string;
@@ -29,7 +29,7 @@ export interface AgentContext {
   events: EventBus;
   log: Logger;
   descriptor: AgentDescriptor;
-  /** Extends the task lease. Call it during long work or SQS will redeliver. */
+  /** Extends the task lease. Call it during long work or the queue will redeliver. */
   keepAlive: () => Promise<void>;
 }
 
@@ -76,9 +76,9 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
     this.version = config.version ?? process.env.APEX_VERSION ?? 'dev';
     this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? 30_000;
 
-    this.memory = new AgentMemory(config.agentId, config.memoryTableName);
-    this.events = new EventBus(config.eventBusName);
-    this.queue = new TaskQueue(config.queueUrl);
+    this.memory = new AgentMemory(config.agentId, config.executor);
+    this.events = new EventBus(config.executor);
+    this.queue = new TaskQueue(config.agentId, config.executor);
     this.log = rootLogger.child({ service: `agent-${config.agentId}`, agentId: config.agentId, instanceId: this.instanceId });
   }
 
@@ -133,7 +133,7 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
     }
 
     this.state = 'stopping';
-    const deadline = Date.now() + 25_000; // stay under ECS stopTimeout
+    const deadline = Date.now() + 25_000; // stay under the container platform's stop timeout
     while (this.active > 0 && Date.now() < deadline) await sleep(200);
     if (this.active > 0) {
       this.log.warn('drain deadline reached with tasks in flight', { active: this.active });
@@ -164,12 +164,11 @@ export abstract class Agent<TPayload = unknown, TOutput = unknown> {
   /**
    * Runs exactly one task.
    *
-   * The polling loop and the Lambda handler both come through here, so retry
-   * classification, expiry, lease renewal and result reporting behave
-   * identically no matter which way the agent is deployed. The lease operations
-   * are injected because SQS receipt handling differs between the two: a
-   * container acks explicitly, while Lambda acks by returning without listing
-   * the message as a failure.
+   * Retry classification, expiry, lease renewal, and result reporting all
+   * live here so they behave identically regardless of caller. The lease
+   * operations (ack/nack/keepAlive) are injected rather than called on
+   * `this.queue` directly, which keeps this method testable against a fake
+   * lease without a real database.
    */
   async runTask(
     task: AgentTask<TPayload>,
@@ -269,14 +268,30 @@ function isRetryable(err: unknown): boolean {
   if (err && typeof err === 'object') {
     if ('retryable' in err) return Boolean((err as { retryable: unknown }).retryable);
     const name = (err as { name?: string }).name ?? '';
-    const code = (err as { code?: string }).code ?? '';
-    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-    if (status && status >= 500) return true;
-    if (status === 429) return true;
-    if (/Throttl|TooManyRequests|ServiceUnavailable|Timeout|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(`${name} ${code}`)) return true;
-    if (/AccessDenied|Validation|NotFound|InvalidParameter/i.test(`${name} ${code}`)) return false;
+    const code = (err as { code?: unknown }).code;
+    const codeText = typeof code === 'string' ? code : '';
+
+    // HTTP-status-shaped errors, wherever the caller's client library put the
+    // number (a plain fetch Response, Google Cloud's REST clients, or a
+    // nested axios-style response object).
+    const status =
+      (err as { status?: number }).status ??
+      (err as { statusCode?: number }).statusCode ??
+      (err as { response?: { status?: number } }).response?.status;
+    if (typeof status === 'number' && (status >= 500 || status === 429)) return true;
+
+    // gRPC-shaped errors, from Google Cloud client libraries that use gRPC
+    // transport (e.g. @google-cloud/kms, @google-cloud/storage's resumable
+    // uploads). 4=DEADLINE_EXCEEDED, 8=RESOURCE_EXHAUSTED, 10=ABORTED,
+    // 14=UNAVAILABLE are all safe to retry; anything else numeric is not.
+    if (typeof code === 'number') return [4, 8, 10, 14].includes(code);
+
+    if (/Throttl|TooManyRequests|ServiceUnavailable|Timeout|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(`${name} ${codeText}`)) {
+      return true;
+    }
+    if (/AccessDenied|PermissionDenied|Validation|NotFound|InvalidParameter/i.test(`${name} ${codeText}`)) return false;
   }
-  return true; // unknown failures are assumed transient once, then DLQ'd
+  return true; // unknown failures are assumed transient once, then dead-lettered
 }
 
 export function sleep(ms: number): Promise<void> {

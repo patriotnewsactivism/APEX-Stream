@@ -28,16 +28,26 @@ export interface BuiltServer {
  * knows anything the other does not.
  */
 export async function buildServerParts(): Promise<BuiltServer> {
-  const db = new Database(await createExecutor());
+  const executor = await createExecutor();
+  const db = new Database(executor);
   const audit = new AuditWriter(db);
-  const dispatcher = new Dispatcher(config);
-  const events = new EventBus(config.EVENT_BUS_NAME);
+  const dispatcher = new Dispatcher(executor);
+  const events = new EventBus(executor);
   const auth = new Authenticator(config);
   const beast = new BeastController(config, db, audit, dispatcher, events, log);
 
   const app = Fastify({
     logger: false, // structured logging goes through @apex/core's logger
-    trustProxy: true, // behind an ALB
+    // Cloud Run sits exactly one hop in front of this service (Google Front
+    // End) — trust that one hop's X-Forwarded-For entry, not the whole
+    // client-supplied chain. `true` would let a client spoof request.ip by
+    // prepending arbitrary values to its own X-Forwarded-For header, which
+    // matters here because request.ip feeds both the rate-limit key below
+    // and the audit trail's ipAddress field. Fastify's numeric hop-count
+    // shorthand (`trustProxy: 1`) isn't in its shipped TypeScript types even
+    // though @fastify/proxy-addr supports it at runtime, so this expresses
+    // the identical "trust only hop 0" logic as the function form instead.
+    trustProxy: (_address, hop) => hop < 1,
     bodyLimit: 2 * 1024 * 1024,
     requestIdHeader: 'x-request-id',
   });
@@ -56,10 +66,7 @@ export async function buildServerParts(): Promise<BuiltServer> {
 
   // Authenticate everything except health and the OPTIONS preflight.
   app.addHook('onRequest', async (request, reply) => {
-    // The scheduled expiry sweep arrives without a user token; it is invoked
-    // by EventBridge inside the account and cannot be reached from outside.
     if (request.method === 'OPTIONS' || request.url === '/health') return;
-    if (request.url === '/internal/expire-runs' && request.headers['x-apex-internal'] === 'schedule') return;
     const token = bearerFrom(request);
     if (!token) {
       await reply.code(401).send({ error: 'unauthenticated', message: 'Bearer token required.' });

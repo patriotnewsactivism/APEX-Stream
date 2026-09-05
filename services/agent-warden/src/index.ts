@@ -1,8 +1,10 @@
 import {
   Agent,
   KmsDataKeyProvider,
+  createExecutor,
   startHealthServer,
   type AgentContext,
+  type SqlExecutor,
 } from '@apex/agent-runtime';
 import { decryptEnvelope, rootLogger, type AgentTask, type EnvelopeCiphertext } from '@apex/core';
 import { defaultClassifier, type Classifier } from './classify.js';
@@ -274,25 +276,25 @@ class Warden extends Agent<WardenPayload, WardenResult> {
   }
 }
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) throw new Error(`missing required environment variable ${name}`);
-  return value;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 const log = rootLogger.child({ service: 'agent-warden', agentId: 'warden' });
 
-const agent = new Warden({
-  agentId: 'warden',
-  queueUrl: required('QUEUE_URL'),
-  memoryTableName: required('MEMORY_TABLE'),
-  eventBusName: required('EVENT_BUS_NAME'),
+async function main(): Promise<void> {
+  const executor: SqlExecutor = await createExecutor();
+  const agent = new Warden({
+    agentId: 'warden',
+    executor,
+  });
+
+  startHealthServer(Number(process.env.PORT ?? 8080), log, () => ({ healthy: true, detail: { agent: 'warden' } }));
+
+  await agent.start();
+}
+
+main().catch((err) => {
+  log.error('agent failed to start', { error: err });
+  process.exit(1);
 });
-
-startHealthServer(Number(process.env.PORT ?? 8080), log, () => ({ healthy: true, detail: { agent: 'warden' } }));
-
-void agent.start();

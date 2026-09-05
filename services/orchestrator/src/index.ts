@@ -1,9 +1,8 @@
 import { buildServerParts, config, log } from './server.js';
 
 /**
- * Container entry point. Listens on a port and runs the Beast-run expiry sweep
- * in-process. The lean profile uses `lambda.ts` instead, where expiry is driven
- * by an EventBridge schedule rather than a timer in a long-lived process.
+ * Entry point. Listens on a port and runs the Beast-run expiry sweep
+ * in-process via a timer — the only profile this service runs as.
  */
 async function main(): Promise<void> {
   const { app, db, beast } = await buildServerParts();

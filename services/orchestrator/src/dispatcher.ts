@@ -1,22 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { TaskQueue } from '@apex/agent-runtime';
+import { TaskQueue, type SqlExecutor } from '@apex/agent-runtime';
 import { AGENT_REGISTRY, type AgentId, type AgentTask, type TaskKind } from '@apex/core';
-import { queueUrlFor, type Config } from './config.js';
 
 /**
  * Sends work to agents.
  *
  * Every task carries an explicit `expiresAt`. This matters most in Beast mode:
- * when four agents are saturated and a run is cancelled, the queues still hold
- * thousands of messages. Rather than purging queues (which destroys in-flight
+ * when five agents are saturated and a run is cancelled, the queues still hold
+ * thousands of tasks. Rather than purging queues (which destroys in-flight
  * work indiscriminately), tasks simply age out and agents drop them on pickup.
  */
 export class Dispatcher {
   private readonly queues = new Map<AgentId, TaskQueue>();
 
-  constructor(private readonly config: Config) {
+  constructor(db: SqlExecutor) {
     for (const agentId of Object.keys(AGENT_REGISTRY) as AgentId[]) {
-      this.queues.set(agentId, new TaskQueue(queueUrlFor(config, agentId)));
+      this.queues.set(agentId, new TaskQueue(agentId, db));
     }
   }
 
