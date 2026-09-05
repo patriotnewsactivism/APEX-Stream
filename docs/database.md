@@ -8,11 +8,9 @@
 > are current: they're read directly from `db/migrations/`, which hasn't
 > changed platform.
 
-Aurora PostgreSQL Serverless v2, isolated subnets (no internet route),
-schema in `db/migrations/001_initial_schema.sql`, applied by `scripts/migrate.js`
-as a one-off ECS task during deploy (see [`deployment.md`](deployment.md) —
-the migrate step runs inside the VPC on the orchestrator image, not from the
-GitHub runner, since the database has no route out).
+Postgres, schema in `db/migrations/`, applied by
+`services/orchestrator/src/migrate.ts` as a one-off job using the
+orchestrator's own image — see [`PRODUCTION_OPERATIONS.md`](PRODUCTION_OPERATIONS.md).
 
 ## Tables
 
@@ -23,7 +21,7 @@ GitHub runner, since the database has no route out).
 | `observation_signals` | Individual named signal values behind a score, kept so a score can be recomputed and verified against its exact inputs |
 | `runs` | Single-agent / workflow / Beast-mode executions, with a budget and hard expiry |
 | `anomalies` | Scored detections — score, band, confidence, and the full `components` breakdown that produced them |
-| `evidence` | Captured artifacts — S3 pointer, hash, retention date, chain of custody |
+| `evidence` | Captured artifacts — GCS pointer, hash, retention date, chain of custody |
 | `audit_log` | Hash-chained, append-only action log |
 | `workflows` / `workflow_executions` | Declarative DAGs and their runs |
 | `notifications`, `watchlist`, `agent_heartbeats` | Operator-facing / liveness tables |
@@ -42,8 +40,8 @@ GitHub runner, since the database has no route out).
   not enforced in application code because application-code enforcement has
   a race window; a unique index doesn't.
 - **`evidence_no_delete` trigger** — refuses any `DELETE` on an evidence row
-  before its `retain_until` date, citing the S3 Object Lock reason in the
-  error hint. This is deliberately redundant with
+  before its `retain_until` date, citing the storage-level retention lock
+  reason in the error hint. This is deliberately redundant with
   [`rbac.ts`](SECURITY.md) denying `evidence:delete` to every role including
   owner — the database enforces it even if a bug or a direct psql session
   bypasses the API layer entirely.
@@ -56,7 +54,8 @@ GitHub runner, since the database has no route out).
 
 ## Adding a migration
 
-Add `db/migrations/00N_description.sql`, idempotent (`CREATE TABLE IF NOT
-EXISTS`, `CREATE INDEX IF NOT EXISTS`) like `001` — the migrate step is
-designed to be safely re-run. `scripts/migrate.js` applies migrations in
-filename order and records what's been applied.
+Add `db/migrations/00N_description.sql` as a new file — never edit one that
+has already run, since `migrate.ts` checksums each applied file and refuses
+to continue if one has changed. `services/orchestrator/src/migrate.ts`
+applies migrations in filename order, each inside its own transaction, and
+records what's been applied.

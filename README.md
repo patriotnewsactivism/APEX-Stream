@@ -19,9 +19,31 @@ A dedicated APEX-Stream service has not yet been verified, so merges can build/t
 
 ## Runtime migration status
 
-The orchestrator can boot on Cloud Run and has proven Postgres connectivity. The deeper fleet migration is not complete yet: agent dispatch/eventing, authentication, and evidence storage still contain AWS-derived SQS/EventBridge/Cognito/S3/KMS interfaces. Temporary fake AWS resource identifiers are not an acceptable production architecture and are being retired rather than treated as working infrastructure.
+As of 2026-09-05 (PRs #13-#17 on this repository), every AWS-derived interface
+flagged in earlier operations notes has been replaced in code:
 
-Until those seams are replaced or deliberately backed by real services, `/health` proves orchestrator/database health only; it does not prove the full multi-agent fleet is operational.
+| Was | Now |
+|---|---|
+| SQS + EventBridge (dispatch, eventing) | Postgres (`SELECT ... FOR UPDATE SKIP LOCKED`, `pg_notify`) |
+| DynamoDB (agent memory) | Postgres |
+| AWS KMS (envelope encryption) | Cloud KMS |
+| S3 + S3 Object Lock (evidence storage) | GCS + GCS Object Retention Lock |
+| ECS `RunTaskCommand` (Sentinel's on-demand launcher) | Cloud Run Jobs |
+| Bedrock (Warden's Claude calls) | OpenRouter |
+| Cognito (operator auth) | Identity Platform / Firebase Auth |
+
+No AWS SDK package, and no AWS-specific service call, remains anywhere in this
+repository's source.
+
+This is **not** the same claim as "verified working in production." None of
+it has been exercised against live GCP, Identity Platform, or OpenRouter
+credentials from any session that made these changes — each migrating PR says
+so explicitly, and the points that most need live verification before relying
+on them (GCS Object Retention Lock actually taking effect, the Cloud Run Jobs
+execution-naming assumption in `sentinel.ts`, `verifyIdToken()` against a real
+token) are flagged in code comments at exactly those points, not asserted as
+working. `/health` still proves orchestrator/database health only, not that
+the full fleet works end to end against real cloud services.
 
 ## Layout
 

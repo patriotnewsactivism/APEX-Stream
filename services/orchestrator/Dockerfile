@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build context is the repository root so workspace packages resolve.
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/node:22-alpine AS build
+FROM --platform=$BUILDPLATFORM mirror.gcr.io/library/node:22-alpine AS build
 WORKDIR /repo
 
 # Manifests first: dependency layers stay cached while source churns.
@@ -24,7 +24,7 @@ RUN npm run build -w @apex/core \
 # Drop dev dependencies from the layer that ships.
 RUN npm prune --omit=dev
 
-FROM public.ecr.aws/docker/library/node:22-alpine AS runtime
+FROM mirror.gcr.io/library/node:22-alpine AS runtime
 ENV NODE_ENV=production NODE_OPTIONS=--enable-source-maps
 WORKDIR /repo
 

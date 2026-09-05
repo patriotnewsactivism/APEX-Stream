@@ -19,8 +19,6 @@ const schema = z.object({
   EVIDENCE_BUCKET: z.string().min(1),
   GCP_KMS_KEY_NAME: z.string().min(1),
 
-  NOTIFY_SNS_TOPIC_ARN: z.string().optional(),
-  NOTIFY_FROM_EMAIL: z.string().email().optional(),
   DASHBOARD_ORIGIN: z.string().default('*'),
 
   /** Ceiling any single Beast run may request. Operators cannot exceed it. */

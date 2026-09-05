@@ -16,7 +16,7 @@ export default defineConfig({
   server: {
     port: 5173,
     // Local dev proxies to the deployed API so the browser sees one origin,
-    // exactly as it does behind CloudFront in production.
+    // matching how the dashboard and API are served together in production.
     proxy: {
       '/api': {
         target: process.env.VITE_API_TARGET ?? 'http://localhost:8080',
