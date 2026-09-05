@@ -1,128 +1,113 @@
-import { ECSClient, RunTaskCommand, ListTasksCommand, StopTaskCommand } from '@aws-sdk/client-ecs';
+import { ExecutionsClient, JobsClient, protos } from '@google-cloud/run';
 import type { Logger } from '@apex/core';
 
 /**
  * Launches Sentinel on demand.
  *
- * In the lean profile Sentinel has a task definition but no service, so nothing
- * runs — and nothing is billed — until an operator starts a watch. This is the
- * single largest cost lever in the platform: continuous stream watching is
- * roughly thirty times the cost of every other agent combined, so it is opt-in
- * per watch rather than something that quietly stays on.
+ * In the lean profile Sentinel has a Cloud Run Job but no standing service,
+ * so nothing runs -- and nothing is billed -- until an operator starts a
+ * watch. This is the single largest cost lever in the platform: continuous
+ * stream watching is roughly thirty times the cost of every other agent
+ * combined, so it is opt-in per watch rather than something that quietly
+ * stays on.
  *
- * Tasks run in a public subnet with a public IP and a security group that
- * permits no inbound traffic. Egress through the internet gateway is free,
- * where routing the same traffic through NAT would cost $32/month plus data
- * for a container that may run for twenty minutes a week.
+ * Cloud Run Jobs bills only for actual execution time and needs no idle
+ * reservation choice the way the Fargate task this replaced did -- there is
+ * no on-demand/spot distinction left to make here. Networking (egress to the
+ * public stream, no inbound) is a property of the Job resource itself,
+ * configured out of band at `gcloud run jobs deploy` time, not of this
+ * launcher.
  */
 export interface SentinelLaunchConfig {
-  clusterArn: string;
-  taskDefinition: string;
-  subnetIds: string[];
-  securityGroupId: string;
-  useSpot: boolean;
+  /** Fully-qualified: projects/{project}/locations/{location}/jobs/{job} */
+  jobName: string;
 }
 
 export function readSentinelConfig(env: NodeJS.ProcessEnv = process.env): SentinelLaunchConfig | null {
-  const clusterArn = env.SENTINEL_CLUSTER_ARN;
-  const taskDefinition = env.SENTINEL_TASK_DEFINITION;
-  const subnets = env.SENTINEL_SUBNET_IDS;
-  const securityGroupId = env.SENTINEL_SECURITY_GROUP_ID;
-  if (!clusterArn || !taskDefinition || !subnets || !securityGroupId) return null;
-  return {
-    clusterArn,
-    taskDefinition,
-    subnetIds: subnets.split(',').filter(Boolean),
-    securityGroupId,
-    useSpot: env.APEX_ENV !== 'prod',
-  };
+  const jobName = env.SENTINEL_JOB_NAME;
+  if (!jobName) return null;
+  return { jobName };
 }
 
 export class SentinelLauncher {
-  private readonly ecs: ECSClient;
+  private readonly jobs: JobsClient;
+  private readonly executions: ExecutionsClient;
 
   constructor(
     private readonly config: SentinelLaunchConfig,
     private readonly log: Logger,
-    client?: ECSClient,
+    jobs?: JobsClient,
+    executions?: ExecutionsClient,
   ) {
-    this.ecs = client ?? new ECSClient({});
+    this.jobs = jobs ?? new JobsClient();
+    this.executions = executions ?? new ExecutionsClient();
   }
 
-  /** Starts one watch. Returns the task ARN so the run can stop it early. */
+  /** Starts one watch. Returns the execution name so the run can cancel it early. */
   async launch(input: {
     runId: string;
     sourceId: string;
     watchMinutes: number;
     segmentSeconds?: number;
-  }): Promise<{ taskArn: string | null; reason: string | null }> {
+  }): Promise<{ executionName: string | null; reason: string | null }> {
     const running = await this.runningCount();
-    // A hard ceiling here as well as in the task definition: a bug that
-    // dispatches a hundred watches should cost one container, not a hundred.
+    // A hard ceiling here as well as in Sentinel's own watchUntil logic: a
+    // bug that dispatches a hundred watches should cost one execution, not a
+    // hundred.
     if (running >= 2) {
-      return { taskArn: null, reason: `already watching ${running} streams; stop one before starting another` };
+      return { executionName: null, reason: `already watching ${running} streams; stop one before starting another` };
     }
 
-    const res = await this.ecs.send(
-      new RunTaskCommand({
-        cluster: this.config.clusterArn,
-        taskDefinition: this.config.taskDefinition,
-        count: 1,
-        capacityProviderStrategy: this.config.useSpot
-          ? [{ capacityProvider: 'FARGATE_SPOT', weight: 1 }]
-          : [{ capacityProvider: 'FARGATE', weight: 1 }],
-        networkConfiguration: {
-          awsvpcConfiguration: {
-            subnets: this.config.subnetIds,
-            securityGroups: [this.config.securityGroupId],
-            // Required without a NAT gateway: this is how the task reaches the
-            // stream and the AWS APIs at all.
-            assignPublicIp: 'ENABLED',
+    const [operation] = await this.jobs.runJob({
+      name: this.config.jobName,
+      overrides: {
+        taskCount: 1,
+        containerOverrides: [
+          {
+            env: [
+              { name: 'APEX_RUN_ID', value: input.runId },
+              { name: 'APEX_SOURCE_ID', value: input.sourceId },
+              { name: 'APEX_WATCH_MINUTES', value: String(input.watchMinutes) },
+              { name: 'APEX_SEGMENT_SECONDS', value: String(input.segmentSeconds ?? 30) },
+            ],
           },
-        },
-        overrides: {
-          containerOverrides: [
-            {
-              name: 'sentinel',
-              environment: [
-                { name: 'APEX_RUN_ID', value: input.runId },
-                { name: 'APEX_SOURCE_ID', value: input.sourceId },
-                { name: 'APEX_WATCH_MINUTES', value: String(input.watchMinutes) },
-                { name: 'APEX_SEGMENT_SECONDS', value: String(input.segmentSeconds ?? 30) },
-              ],
-            },
-          ],
-        },
-        tags: [
-          { key: 'Project', value: 'APEX-Stream' },
-          { key: 'RunId', value: input.runId },
         ],
-        propagateTags: 'TASK_DEFINITION',
-      }),
-    );
+      },
+    });
 
-    const taskArn = res.tasks?.[0]?.taskArn ?? null;
-    const failure = res.failures?.[0];
-    if (!taskArn) {
-      this.log.error('sentinel launch failed', { reason: failure?.reason, detail: failure?.detail });
-      return { taskArn: null, reason: failure?.reason ?? 'ECS did not start the task' };
+    // The Execution resource is created synchronously as part of accepting
+    // the RunJob request -- well before the watch itself finishes, which can
+    // take hours -- so the operation's metadata should already carry its
+    // name without waiting on operation.promise(). Not verified against a
+    // live project: if metadata comes back empty instead, the fallback below
+    // picks up the execution this call just created (listExecutions is
+    // sorted by creation time, descending).
+    const metadata = operation.metadata as protos.google.cloud.run.v2.IExecution | null | undefined;
+    const executionName = metadata?.name ?? (await this.newestExecutionName());
+
+    if (!executionName) {
+      this.log.error('sentinel launch failed', { jobName: this.config.jobName });
+      return { executionName: null, reason: 'Cloud Run did not report the new execution name' };
     }
 
     this.log.info('sentinel watch launched', {
-      taskArn, sourceId: input.sourceId, watchMinutes: input.watchMinutes, spot: this.config.useSpot,
+      executionName, sourceId: input.sourceId, watchMinutes: input.watchMinutes,
     });
-    return { taskArn, reason: null };
+    return { executionName, reason: null };
   }
 
-  async stop(taskArn: string, reason = 'operator stopped the watch'): Promise<void> {
-    await this.ecs.send(new StopTaskCommand({ cluster: this.config.clusterArn, task: taskArn, reason }));
-    this.log.info('sentinel watch stopped', { taskArn, reason });
+  async stop(executionName: string, reason = 'operator stopped the watch'): Promise<void> {
+    await this.executions.cancelExecution({ name: executionName });
+    this.log.info('sentinel watch stopped', { executionName, reason });
   }
 
   async runningCount(): Promise<number> {
-    const res = await this.ecs.send(
-      new ListTasksCommand({ cluster: this.config.clusterArn, desiredStatus: 'RUNNING' }),
-    );
-    return res.taskArns?.length ?? 0;
+    const [executions] = await this.executions.listExecutions({ parent: this.config.jobName });
+    return executions.filter((e) => !e.completionTime).length;
+  }
+
+  private async newestExecutionName(): Promise<string | null> {
+    const [executions] = await this.executions.listExecutions({ parent: this.config.jobName, pageSize: 1 });
+    return executions[0]?.name ?? null;
   }
 }
