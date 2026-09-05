@@ -23,9 +23,9 @@ export interface BuiltServer {
 /**
  * Constructs the API.
  *
- * Deliberately separate from starting it: the container entry point listens on
- * a port, the Lambda entry point wraps the same instance in a proxy. Neither
- * knows anything the other does not.
+ * Deliberately separate from starting it: `buildServer()` below returns a
+ * ready Fastify instance with no port bound, so it can be driven with
+ * `app.inject()` in tests without a real socket.
  */
 export async function buildServerParts(): Promise<BuiltServer> {
   const executor = await createExecutor();
@@ -33,7 +33,7 @@ export async function buildServerParts(): Promise<BuiltServer> {
   const audit = new AuditWriter(db);
   const dispatcher = new Dispatcher(executor);
   const events = new EventBus(executor);
-  const auth = new Authenticator(config);
+  const auth = new Authenticator();
   const beast = new BeastController(config, db, audit, dispatcher, events, log);
 
   const app = Fastify({

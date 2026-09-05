@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   api, setAccessToken, setUnauthorizedHandler,
   type AgentStatus, type Anomaly, type AuditEntry, type EvidenceItem,
 } from './api.js';
-import { beginSignIn, can, completeSignIn, loadSession, readAuthConfig, signOut, type Session } from './auth.js';
+import { can, loadSession, readAuthConfig, signIn, signOut, type Session } from './auth.js';
 import { FleetPanel } from './components/FleetPanel.js';
 import { SourcesPanel } from './components/SourcesPanel.js';
 import { CommentQueue } from './components/CommentQueue.js';
@@ -31,6 +31,9 @@ export function App(): JSX.Element {
   const [session, setSession] = useState<Session | null>(() => loadSession());
   const [view, setView] = useState<View>('fleet');
   const [error, setError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [signingIn, setSigningIn] = useState(false);
 
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [anomalies, setAnomalies] = useState<Anomaly[]>([]);
@@ -38,23 +41,28 @@ export function App(): JSX.Element {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Complete the OAuth redirect before anything else tries to call the API.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    if (!code || !authConfig || session) return;
-    void completeSignIn(authConfig, code)
-      .then((next) => {
-        setSession(next);
-        window.history.replaceState({}, '', '/');
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [authConfig, session]);
-
-  useEffect(() => {
-    setAccessToken(session?.accessToken ?? null);
+    setAccessToken(session?.idToken ?? null);
     setUnauthorizedHandler(() => setSession(null));
   }, [session]);
+
+  const handleSignIn = useCallback(
+    async (e: FormEvent): Promise<void> => {
+      e.preventDefault();
+      if (!authConfig) return;
+      setSigningIn(true);
+      setError(null);
+      try {
+        setSession(await signIn(authConfig, email, password));
+        setPassword('');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSigningIn(false);
+      }
+    },
+    [authConfig, email, password],
+  );
 
   const roles = session?.roles ?? [];
 
@@ -101,14 +109,33 @@ export function App(): JSX.Element {
           <p>Multi-agent monitoring, anomaly detection and evidence custody.</p>
           {error && <div className="banner banner-error">{error}</div>}
           {authConfig ? (
-            <button className="primary" style={{ width: '100%' }} onClick={() => void beginSignIn(authConfig)}>
-              Sign in
-            </button>
+            <form onSubmit={(e) => void handleSignIn(e)}>
+              <input
+                type="email"
+                placeholder="Email"
+                value={email}
+                autoComplete="username"
+                required
+                onChange={(e) => setEmail(e.target.value)}
+                style={{ width: '100%', marginBottom: 8 }}
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                autoComplete="current-password"
+                required
+                onChange={(e) => setPassword(e.target.value)}
+                style={{ width: '100%', marginBottom: 8 }}
+              />
+              <button className="primary" type="submit" disabled={signingIn} style={{ width: '100%' }}>
+                {signingIn ? <span className="spin" /> : 'Sign in'}
+              </button>
+            </form>
           ) : (
             <div className="banner banner-warn">
-              Authentication is not configured. Set <code>VITE_COGNITO_DOMAIN</code> and{' '}
-              <code>VITE_COGNITO_CLIENT_ID</code> at build time — the deploy pipeline does this from the
-              CDK outputs.
+              Authentication is not configured. Set <code>VITE_FIREBASE_API_KEY</code> at build time — the
+              deploy pipeline does this from the Identity Platform project's web app config.
             </div>
           )}
         </div>
@@ -137,7 +164,7 @@ export function App(): JSX.Element {
         <div className="whoami">
           <strong>{session.username}</strong>
           {roles.length ? roles.join(', ') : 'no roles assigned'}
-          <button style={{ width: '100%', marginTop: 10 }} onClick={() => signOut(authConfig)}>
+          <button style={{ width: '100%', marginTop: 10 }} onClick={() => { signOut(); setSession(null); }}>
             Sign out
           </button>
         </div>
@@ -158,8 +185,8 @@ export function App(): JSX.Element {
 
         {roles.length === 0 && (
           <div className="banner banner-warn">
-            Your account has no roles assigned, so everything is hidden. An administrator needs to add you
-            to a Cognito group (owner, admin, operator, analyst or viewer).
+            Your account has no roles assigned, so everything is hidden. An administrator needs to grant you
+            a role (owner, admin, operator, analyst or viewer) via the operator-provisioning workflow.
           </div>
         )}
 

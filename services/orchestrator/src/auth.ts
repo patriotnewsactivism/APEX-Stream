@@ -1,23 +1,30 @@
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { getAuth, type Auth } from 'firebase-admin/auth';
 import { AuthorizationError, decide, ROLES, type Role } from '@apex/core';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { Config } from './config.js';
 import type { AuditWriter } from './db.js';
 
 /**
- * Cognito JWT verification.
+ * Identity Platform (Firebase Auth) ID token verification.
  *
- * Access tokens are verified against the pool's published JWKS — signature,
- * issuer, audience and expiry. Roles come from `cognito:groups`, so group
- * membership in Cognito is the single source of truth for authorisation and
- * there is no second user table to drift out of sync.
+ * `verifyIdToken()` checks signature, issuer and expiry, and also the
+ * Firebase-specific claims a generic JWT verifier wouldn't know to check
+ * (auth_time, token type) -- it already validates the token's audience
+ * against whichever project the Admin SDK itself is initialized for, via
+ * the same Application Default Credentials every other GCP client in this
+ * codebase uses, so there is no separate project-id config to keep in sync
+ * here the way COGNITO_CLIENT_ID had to be.
+ *
+ * Roles come from a custom claim (`roles`) set by the operator-provisioning
+ * workflow via `setCustomUserClaims()`, so that workflow is the single
+ * source of truth for authorisation and there is no second user table to
+ * drift out of sync.
  */
 export interface Principal {
   subject: string;
   username: string;
   email: string | null;
   roles: Role[];
-  tokenId: string;
 }
 
 declare module 'fastify' {
@@ -27,42 +34,24 @@ declare module 'fastify' {
 }
 
 export class Authenticator {
-  private readonly jwks: ReturnType<typeof createRemoteJWKSet>;
-  private readonly issuer: string;
+  private readonly auth: Auth;
 
-  constructor(private readonly config: Config) {
-    this.issuer = `https://cognito-idp.${config.AWS_REGION}.amazonaws.com/${config.COGNITO_USER_POOL_ID}`;
-    this.jwks = createRemoteJWKSet(new URL(`${this.issuer}/.well-known/jwks.json`), {
-      cooldownDuration: 30_000,
-      cacheMaxAge: 600_000,
-    });
+  constructor() {
+    const app = getApps()[0] ?? initializeApp({ credential: applicationDefault() });
+    this.auth = getAuth(app);
   }
 
   async verify(token: string): Promise<Principal> {
-    const { payload } = await jwtVerify(token, this.jwks, {
-      issuer: this.issuer,
-      clockTolerance: 30,
-    });
+    const decoded = await this.auth.verifyIdToken(token);
 
-    // Cognito access tokens carry client_id; id tokens carry aud. Accept either
-    // but require it to match this application.
-    const audience = (payload.aud as string | undefined) ?? (payload.client_id as string | undefined);
-    if (audience !== this.config.COGNITO_CLIENT_ID) {
-      throw new Error('token was issued for a different application');
-    }
-    if (payload.token_use !== 'access' && payload.token_use !== 'id') {
-      throw new Error('unexpected token_use');
-    }
-
-    const groups = Array.isArray(payload['cognito:groups']) ? (payload['cognito:groups'] as string[]) : [];
-    const roles = groups.filter((g): g is Role => (ROLES as string[]).includes(g));
+    const claimed = decoded.roles as unknown;
+    const roles = Array.isArray(claimed) ? claimed.filter((r): r is Role => (ROLES as string[]).includes(r)) : [];
 
     return {
-      subject: String(payload.sub),
-      username: String(payload.username ?? payload['cognito:username'] ?? payload.sub),
-      email: (payload.email as string | undefined) ?? null,
+      subject: decoded.uid,
+      username: String(decoded.email ?? decoded.uid),
+      email: decoded.email ?? null,
       roles,
-      tokenId: String(payload.jti ?? ''),
     };
   }
 }

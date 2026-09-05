@@ -23,32 +23,24 @@ permissions:
 jobs:
   create:
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
     steps:
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
-          role-session-name: apex-user-${{ github.run_id }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Invite the user and assign the role
         env:
           EMAIL: ${{ inputs.email }}
           ROLE: ${{ inputs.role }}
-          ENVIRONMENT: ${{ inputs.environment }}
         run: |
           set -euo pipefail
-          pool=$(aws cognito-idp list-user-pools --max-results 60 \
-            --query "UserPools[?Name=='apex-$ENVIRONMENT'].Id | [0]" --output text)
-          [ "$pool" != "None" ] || { echo "::error::No user pool for $ENVIRONMENT"; exit 1; }
-
-          # Cognito emails a temporary password; MFA is enrolled on first sign-in.
-          aws cognito-idp admin-create-user \
-            --user-pool-id "$pool" \
-            --username "$EMAIL" \
-            --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
-            --desired-delivery-mediums EMAIL || echo "user already exists, continuing"
-
-          aws cognito-idp admin-add-user-to-group \
-            --user-pool-id "$pool" --username "$EMAIL" --group-name "$ROLE"
-
-          echo "Invited $EMAIL as $ROLE. They will be asked to set a password and enrol MFA." >> "$GITHUB_STEP_SUMMARY"
+          npm install --no-save firebase-admin@^14.3.0
+          node .github/scripts/create-operator.mjs
