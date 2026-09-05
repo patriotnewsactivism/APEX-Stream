@@ -1,5 +1,13 @@
 # Database
 
+> **The compute/networking details below are HISTORICAL (retired AWS
+> Aurora/VPC/ECS setup).** `scripts/migrate.js` and the isolated-subnet
+> deployment model described here predate the Google Cloud Run migration —
+> `services/orchestrator/src/migrate.ts` is the current migration runner (see
+> `docs/PRODUCTION_OPERATIONS.md`). The schema, tables, and constraints below
+> are current: they're read directly from `db/migrations/`, which hasn't
+> changed platform.
+
 Aurora PostgreSQL Serverless v2, isolated subnets (no internet route),
 schema in `db/migrations/001_initial_schema.sql`, applied by `scripts/migrate.js`
 as a one-off ECS task during deploy (see [`deployment.md`](deployment.md) —
@@ -36,12 +44,12 @@ GitHub runner, since the database has no route out).
 - **`evidence_no_delete` trigger** — refuses any `DELETE` on an evidence row
   before its `retain_until` date, citing the S3 Object Lock reason in the
   error hint. This is deliberately redundant with
-  [`rbac.ts`](security.md) denying `evidence:delete` to every role including
+  [`rbac.ts`](SECURITY.md) denying `evidence:delete` to every role including
   owner — the database enforces it even if a bug or a direct psql session
   bypasses the API layer entirely.
 - **`audit_no_update` trigger** — refuses `UPDATE` or `DELETE` on `audit_log`
   outright, no exceptions, no retention window. Combined with the
-  `prev_hash`/`entry_hash` chain (see [`security.md`](security.md)), altering
+  `prev_hash`/`entry_hash` chain (see [`SECURITY.md`](SECURITY.md)), altering
   history requires rewriting every row after the tampered one, which the
   trigger already prevents at the database level regardless of hash
   verification.

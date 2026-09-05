@@ -1,5 +1,15 @@
 # Agents
 
+> **Deployment details below are HISTORICAL (retired AWS Fargate/CDK).**
+> `infra/lib/config.ts` and `infra/lib/compute-stack.ts`/`messaging-stack.ts`,
+> referenced under "Sizing" and "Adding a fifth agent", have been removed from
+> this repository — APEX-Stream is migrating to Google Cloud Run, where none
+> of the five agents currently has a deploy path (only the orchestrator does;
+> see `docs/PRODUCTION_OPERATIONS.md`). The agent roster, task lifecycle, and
+> queue-based dispatch model described below are current and unchanged — task
+> dispatch is still real AWS SQS/EventBridge today, independent of which
+> compute platform runs the containers.
+
 Four independent Fargate services, each with its own SQS queue + dead-letter
 queue, each implementing the same `run(task) -> result` contract from
 `packages/agent-runtime`. None have public ingress — they pull work, they

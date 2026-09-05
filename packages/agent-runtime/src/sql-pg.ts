@@ -1,5 +1,6 @@
 import pg from 'pg';
 import type { SqlExecutor } from './sql.js';
+import { loadRdsCaBundle } from './rds-ca.js';
 
 /**
  * Direct Postgres access for container deployments.
@@ -36,13 +37,23 @@ export class PgExecutor implements SqlExecutor {
   private readonly pool: pg.Pool;
 
   constructor(connectionString: string, requireCa = true) {
+    // `rejectUnauthorized: true` with no `ca` guarantees "self-signed
+    // certificate in certificate chain" against AWS RDS/Aurora -- see
+    // rds-ca.ts. Load the bundle when available; if it's missing, degrade to
+    // encrypted-but-unverified rather than fail every connection outright.
+    const ssl = requireCa
+      ? (() => {
+          const ca = loadRdsCaBundle();
+          return ca ? { rejectUnauthorized: true, ca } : { rejectUnauthorized: false };
+        })()
+      : undefined;
     this.pool = new pg.Pool({
       connectionString,
       max: 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
       statement_timeout: 20_000,
-      ssl: requireCa ? { rejectUnauthorized: true } : undefined,
+      ssl,
       application_name: process.env.APEX_SERVICE ?? 'apex',
     });
   }

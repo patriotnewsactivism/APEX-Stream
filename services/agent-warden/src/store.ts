@@ -1,6 +1,5 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import pg from 'pg';
+import { loadRdsCaBundle } from '@apex/agent-runtime';
 import type { Classification } from './classify.js';
 
 /**
@@ -12,16 +11,10 @@ import type { Classification } from './classify.js';
  * classifications and drafts, and it reads credentials. It has no write path to
  * `reply_drafts.status` beyond creating a pending row — approving is the
  * orchestrator's job, and keeping that out of reach here is the point.
+ *
+ * `loadRdsCaBundle` itself lives in `@apex/agent-runtime` (used by every
+ * service's Postgres connection) rather than being copy-pasted here.
  */
-
-function loadRdsCaBundle(): string | undefined {
-  try {
-    return readFileSync(join(process.cwd(), 'packages/core/certs/rds-global-bundle.pem'), 'utf8');
-  } catch (err) {
-    console.error('rds ca bundle missing, falling back to rejectUnauthorized:false', err);
-    return undefined;
-  }
-}
 
 export interface WardenSource {
   id: string;

@@ -1,5 +1,12 @@
 # Deploying APEX Stream
 
+> **HISTORICAL — this walkthrough is for the retired AWS CDK/CloudFormation
+> deployment path.** It references `infra/bootstrap/github-oidc.yaml` and
+> `infra/lib/*.ts`, which have been removed from this repository. APEX-Stream
+> now deploys to Google Cloud Run via `.github/workflows/deploy.yml`; see
+> `README.md` and `docs/PRODUCTION_OPERATIONS.md` for the current, guarded
+> release process.
+
 Everything below happens in a browser. There is exactly one step that requires
 the AWS console, and it exists only because something has to create the trust
 relationship before GitHub can create anything else.

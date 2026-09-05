@@ -6,11 +6,17 @@ import { join } from 'node:path';
  * Node's default trust store -- `rejectUnauthorized: true` with no `ca`
  * option guarantees "self-signed certificate in certificate chain" on every
  * connection, always (confirmed live: this was silently breaking every DB
- * call from this service). The bundle is a small, public, permanent AWS file
+ * call from Warden). The bundle is a small, public, permanent AWS file
  * (https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem),
  * committed at packages/core/certs/ (shipped into every service image
  * since Dockerfiles COPY the whole `packages` dir) so real cert validation
  * can actually succeed instead of being silently disabled.
+ *
+ * Shared by every `@apex/agent-runtime` consumer (orchestrator, aria, atlas,
+ * sentinel, archivist) via `sql-pg.ts`, and by `agent-warden`, which talks to
+ * Postgres directly instead of through this package. Keep this the single
+ * copy -- it used to be duplicated in both places and only one of the two
+ * copies was ever actually wired into a live connection.
  */
 export function loadRdsCaBundle(): string | undefined {
   try {
