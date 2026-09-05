@@ -116,8 +116,8 @@ would send stops being read.
 |---|---|---|
 | `CHANNEL_VOICE` | Warden task env | Free text describing how your channel sounds. The drafter writes to it. |
 | `DRAFTER=off` | Warden task env | Classify only, never draft. The queue still works. |
-| `CLASSIFIER=keyword` | Warden task env | Use the crude keyword fallback instead of the model. Useful only if Bedrock is unavailable. |
-| `CLASSIFIER_MODEL` / `DRAFTER_MODEL` | Warden task env | Bedrock model id. Defaults to `anthropic.claude-opus-5`. |
+| `CLASSIFIER=keyword` | Warden task env | Use the crude keyword fallback instead of the model. Useful only if OpenRouter is unavailable. |
+| `CLASSIFIER_MODEL` / `DRAFTER_MODEL` | Warden task env | OpenRouter model slug. Defaults to `anthropic/claude-opus-5`. |
 
 ## Cost and quota
 

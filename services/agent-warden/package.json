@@ -13,7 +13,7 @@
     "@apex/core": "*",
     "@apex/agent-runtime": "*",
     "@apex/youtube": "*",
-    "@anthropic-ai/bedrock-sdk": "^0.30.0",
+    "@anthropic-ai/sdk": "^0.124.0",
     "pg": "^8.13.1"
   },
   "devDependencies": {
