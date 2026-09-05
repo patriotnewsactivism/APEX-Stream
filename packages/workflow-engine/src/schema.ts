@@ -35,7 +35,7 @@ const triggerConfig = z.object({
   mode: z.enum(['manual', 'schedule', 'event']),
   /** cron or rate expression when mode = schedule */
   schedule: z.string().optional(),
-  /** EventBridge detail-type when mode = event */
+  /** Matches `agent_events.event_type` when mode = event */
   eventType: z.string().optional(),
 });
 

@@ -28,8 +28,6 @@ const log = rootLogger.child({ service: 'migrate' });
 const MIGRATION_LOCK = 913_477;
 
 async function main(): Promise<void> {
-  // Works over a socket in containers and over the Data API in the lean
-  // profile, so one migration path serves both.
   const db: SqlExecutor = await createExecutor();
 
   const here = path.dirname(fileURLToPath(import.meta.url));

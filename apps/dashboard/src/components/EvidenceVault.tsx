@@ -12,8 +12,8 @@ export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loadi
   return (
     <div>
       <div className="banner banner-ok">
-        Every object below is under S3 Object Lock in compliance mode. It cannot be deleted or altered
-        before its retention date — not by an administrator, not by the account root, not by this application.
+        Every object below is under GCS Object Retention Lock in compliance mode. It cannot be deleted or altered
+        before its retention date — not by an administrator, not by the project owner, not by this application.
       </div>
 
       <table>
@@ -28,7 +28,7 @@ export function EvidenceVault({ items, loading }: { items: EvidenceItem[]; loadi
               <tr>
                 <td>{new Date(item.captured_at).toLocaleString()}</td>
                 <td className="mono" style={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.s3_key.split('/').slice(-2).join('/')}
+                  {item.storage_key.split('/').slice(-2).join('/')}
                 </td>
                 <td className="mono" title={item.sha256}>{item.sha256.slice(0, 12)}…</td>
                 <td>{formatBytes(item.bytes)}</td>

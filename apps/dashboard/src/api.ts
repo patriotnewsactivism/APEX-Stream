@@ -134,7 +134,7 @@ export interface EvidenceItem {
   id: string;
   anomaly_id: string | null;
   captured_at: string;
-  s3_key: string;
+  storage_key: string;
   sha256: string;
   bytes: number;
   retain_until: string;

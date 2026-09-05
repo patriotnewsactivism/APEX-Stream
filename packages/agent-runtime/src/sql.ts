@@ -23,5 +23,5 @@ export async function createExecutor(env: NodeJS.ProcessEnv = process.env): Prom
     throw new Error('set DATABASE_URL');
   }
   const { PgExecutor } = await import('./sql-pg.js');
-  return new PgExecutor(env.DATABASE_URL, env.DATABASE_CA_REQUIRED !== 'false');
+  return new PgExecutor(env.DATABASE_URL, env.DATABASE_CA_REQUIRED !== 'false', env.DATABASE_CA_BUNDLE_PATH);
 }

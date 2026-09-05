@@ -247,13 +247,14 @@ export interface EvidenceRecord {
   observationId: string;
   capturedBy: AgentId;
   capturedAt: string;
-  s3Bucket: string;
-  s3Key: string;
-  s3VersionId: string | null;
+  storageBucket: string;
+  storageKey: string;
+  /** GCS object generation number (the equivalent of an S3 version id). */
+  storageGeneration: string | null;
   sha256: string;
   bytes: number;
   contentType: string;
-  /** ISO timestamp until which S3 Object Lock forbids deletion. */
+  /** ISO timestamp until which the object's retention lock forbids deletion. */
   retainUntil: string;
   /** Hash-chained manifest linking capture context to the stored bytes. */
   manifestSha256: string;

@@ -10,7 +10,8 @@ import type { ActorId } from '../types.js';
  * database can rewrite the whole chain — but it makes silent, partial
  * tampering detectable, which is the realistic threat. For stronger
  * guarantees, `anchorDigest()` produces a digest to publish externally
- * (S3 Object Lock, a second account, or a public timestamp) on a schedule.
+ * (a locked object in a separate storage bucket, a second GCP project, or a
+ * public timestamp) on a schedule.
  */
 
 export const GENESIS_HASH = '0'.repeat(64);
