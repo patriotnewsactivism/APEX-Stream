@@ -6,7 +6,7 @@ import {
 } from '../dist/index.js';
 
 // Local stand-in for KMS: wraps the data key with a fixed XOR so tests do not
-// need AWS. Production injects the real KMS-backed provider.
+// need a live KMS call. Production injects the real Cloud KMS-backed provider.
 const provider = () => {
   const mask = randomBytes(32);
   return {

@@ -1,17 +1,16 @@
 # Agents
 
-> **Deployment details below are HISTORICAL (retired AWS Fargate/CDK).**
-> `infra/lib/config.ts` and `infra/lib/compute-stack.ts`/`messaging-stack.ts`,
-> referenced under "Sizing" and "Adding a fifth agent", have been removed from
-> this repository — APEX-Stream is migrating to Google Cloud Run, where none
-> of the five agents currently has a deploy path (only the orchestrator does;
-> see `docs/PRODUCTION_OPERATIONS.md`). The agent roster, task lifecycle, and
-> queue-based dispatch model described below are current and unchanged — task
-> dispatch is still real AWS SQS/EventBridge today, independent of which
-> compute platform runs the containers.
+> **The "Sizing" and "Adding a fifth agent" sections below are HISTORICAL**
+> (retired AWS Fargate/CDK — `infra/lib/config.ts`,
+> `infra/lib/compute-stack.ts`/`messaging-stack.ts` have been removed from
+> this repository). The agent roster and task lifecycle are current, but
+> dispatch itself is no longer SQS/EventBridge: as of PRs #13-#17
+> (2026-09-05) it is Postgres-native (`packages/agent-runtime/src/bus.ts`),
+> and evidence storage is GCS, not S3 — see `docs/PRODUCTION_OPERATIONS.md`.
 
-Four independent Fargate services, each with its own SQS queue + dead-letter
-queue, each implementing the same `run(task) -> result` contract from
+Four independent services, each with its own Postgres-backed task queue
+(`agent_tasks`, claimed via `SELECT ... FOR UPDATE SKIP LOCKED`), each
+implementing the same `run(task) -> result` contract from
 `packages/agent-runtime`. None have public ingress — they pull work, they
 don't receive it directly.
 
@@ -20,7 +19,7 @@ don't receive it directly.
 | **Aria** | `services/agent-aria` | RSS/HTTP API feeds | `src/feed.ts` |
 | **Atlas** | `services/agent-atlas` | Web pages (scraping/diffing) | `src/page.ts` |
 | **Sentinel** | `services/agent-sentinel` | Live streams | `src/stream.ts` |
-| **Archivist** | `services/agent-archivist` | Uploaded evidence, S3 vault | `src/vault.ts` |
+| **Archivist** | `services/agent-archivist` | Uploaded evidence, GCS vault | `src/vault.ts` |
 | **Warden** | `services/agent-warden` | YouTube live chat and comments | `src/index.ts` |
 
 These map directly to the `sources.kind` check constraint in
@@ -45,12 +44,15 @@ behind a `reply:approve` check. See [`youtube.md`](youtube.md).
    `AgentTask` with an explicit `expiresAt`, `maxAttempts`, `priority`, and a
    `traceId` for correlating a task across logs.
 2. The agent's runtime harness (`packages/agent-runtime`) long-polls its
-   queue, claims a message, and calls the agent's `run()`.
-3. On success, the agent writes results (Postgres for structured rows, S3 for
+   queue, claims a task under a lease, and calls the agent's `run()`.
+3. On success, the agent writes results (Postgres for structured rows, GCS for
    raw evidence) and reports back through the orchestrator's `effects.ts`.
-4. On failure, the message becomes visible again after `VisibilityTimeout`
-   and eventually redrives to the agent's DLQ per `maxAttempts` — a task is
-   never silently dropped.
+4. On a retryable failure, the task becomes claimable again after a backoff
+   and is retried up to `maxAttempts`; once exhausted, or on a non-retryable
+   error, the agent acks it out of the queue and reports a permanent failure
+   as a `task.failed` event rather than leaving it to churn — there is no
+   separate dead-letter queue the way SQS provided, since nothing here needs
+   one — a task is never silently dropped.
 5. On cancellation (e.g. a Beast run stopped mid-flight), tasks are **not**
    purged from the queue — purging queues destroys in-flight work
    indiscriminately. Tasks simply age out via `expiresAt` and agents drop them

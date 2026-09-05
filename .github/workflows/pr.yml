@@ -17,6 +17,23 @@ jobs:
     name: Typecheck, test and build
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: apex
+          POSTGRES_PASSWORD: apex
+          POSTGRES_DB: apex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://apex:apex@localhost:5432/apex_test
+      DATABASE_CA_REQUIRED: 'false'
     steps:
       - uses: actions/checkout@v4
 
@@ -27,6 +44,15 @@ jobs:
 
       - name: Install
         run: npm ci
+
+      - name: Apply migrations to the test database
+        run: |
+          set -euo pipefail
+          for f in db/migrations/*.sql; do
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+        env:
+          PGPASSWORD: apex
 
       - name: Build workspace packages
         run: |
@@ -42,6 +68,7 @@ jobs:
         run: |
           node --test packages/core/test/*.test.mjs
           node --test packages/workflow-engine/test/*.test.mjs
+          node --test packages/agent-runtime/test/*.test.mjs
 
       - name: Build dashboard
         run: npm run build -w @apex/dashboard

@@ -36,17 +36,45 @@ If any step fails, production is not considered released.
 
 ## Current runtime gap
 
-The Cloud Run migration is incomplete at the application layer. Postgres connectivity has been proven, but these interfaces remain AWS-derived:
+The AWS-derived interfaces previously listed here — SQS/EventBridge for task
+dispatch and event fan-out, DynamoDB for agent memory, Cognito for operator
+authentication, S3 Object Lock + KMS for evidence retention, ECS for
+Sentinel's on-demand launcher, and Bedrock for Warden's Claude calls — have
+each been replaced in code (PRs #13-#17 on this repository, 2026-09-05):
+Postgres-native dispatch/eventing/memory, Cloud KMS, GCS + GCS Object
+Retention Lock, Cloud Run Jobs, OpenRouter, and Identity Platform /
+Firebase Auth, respectively. No AWS SDK package remains in this repository.
 
-- task queues: SQS
-- event fan-out: EventBridge
-- operator authentication: Cognito
-- evidence/object retention: S3/Object Lock + KMS
-- some agent runtime helpers and comments still assume AWS execution semantics
+That is a code-level claim, not a production-verified one. None of these
+replacements has been exercised against live GCP, Identity Platform, or
+OpenRouter credentials — the environment every migrating PR was authored in
+had none of these. Specifically unverified, and flagged as such in code
+comments at the exact points that need checking before relying on them:
 
-Do not use fake AWS account IDs, queue URLs, Cognito IDs, bucket names, or KMS aliases as a production compatibility layer. A successful `/health` response currently proves database reachability and orchestrator boot only; it does not prove agent dispatch, authentication, or evidence archival.
+- **GCS Object Retention Lock** actually forbids deletion/overwrite before
+  `retainUntilTime` the way S3 Object Lock did (`services/agent-archivist/src/vault.ts`).
+  Verify with `gcloud storage objects describe --format="value(retention)"`.
+- **Cloud Run Jobs execution naming** — `sentinel.ts`'s `launch()` reads the
+  new execution's name from the `RunJob` operation's metadata immediately,
+  without waiting for the watch to finish; this is the standard LRO
+  convention but has a fallback path that has also never run against a real
+  Job.
+- **`verifyIdToken()`** against a real Identity Platform token, and the
+  `roles` custom claim actually round-tripping from the provisioning
+  workflow to the decoded token.
+- **The provisioning workflow's Workload Identity Federation** setup
+  (`GCP_WORKLOAD_IDENTITY_PROVIDER`/`GCP_SERVICE_ACCOUNT` per GitHub
+  Environment) has never run.
 
-The next platform phase is to replace or deliberately re-home these interfaces before enabling APEX-Stream production deployment.
+Do not use fake GCP resource identifiers (KMS key names, bucket names, Cloud
+Run job names, Firebase project config) as a production compatibility layer,
+for the same reason fake AWS ones were rejected above. A successful `/health`
+response still proves database reachability and orchestrator boot only; it
+does not prove agent dispatch, authentication, or evidence archival against
+real cloud services.
+
+The next platform phase is live verification against a real GCP project and
+Identity Platform instance, then enabling APEX-Stream production deployment.
 
 ## Credential boundaries
 

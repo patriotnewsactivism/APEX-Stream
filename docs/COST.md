@@ -1,5 +1,16 @@
 # Cost model
 
+> **HISTORICAL — describes the retired AWS cost model** (Lambda, Aurora,
+> Fargate, NAT gateways, CloudWatch Budgets). APEX-Stream deploys to Google
+> Cloud Run; see `README.md` and `docs/PRODUCTION_OPERATIONS.md` for current
+> state. The cost-consciousness *principles* below (an on-demand launcher for
+> Sentinel specifically because continuous stream watching dominates the
+> bill, a hard budget/expiry/concurrency ceiling on Beast mode, watching
+> forecasted rather than only actual spend) still hold; the dollar figures
+> and AWS-specific levers do not, and a Cloud Run equivalent has not been
+> recalculated (`packages/core/src/agents.ts`'s `costPerTaskMinuteUsd`
+> figures are flagged, not fixed, for the same reason).
+
 Three profiles ship. Pick with `-c env=<profile>` or the environment input on
 the Deploy workflow.
 

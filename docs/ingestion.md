@@ -38,7 +38,7 @@ expensive agent."
 Archivist doesn't ingest on a schedule — it receives evidence directly
 (operator upload through the orchestrator, or an API call from an external
 system) and is responsible for getting it into the `evidence` table plus the
-S3 evidence bucket with the right chain-of-custody fields intact (see
+GCS evidence bucket with the right chain-of-custody fields intact (see
 [`database.md`](database.md) and [`SECURITY.md`](SECURITY.md) for what
 "intact" means here — this is the one table where write-once semantics
 actually matter).
