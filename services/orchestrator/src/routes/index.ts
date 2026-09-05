@@ -54,23 +54,6 @@ export async function registerRoutes(app: FastifyInstance, deps: RouteDeps): Pro
     });
   });
 
-  /**
-   * Ends Beast runs whose wall-clock window has closed.
-   *
-   * The container profile does this on a timer inside a long-lived process.
-   * Under Lambda there is no such process, so an EventBridge schedule invokes
-   * this instead. It is reachable only from inside the account - the header is
-   * a guard against accidental external calls, not an authentication mechanism,
-   * since the route does nothing an attacker would want and reveals nothing.
-   */
-  app.post('/internal/expire-runs', async (request, reply) => {
-    if (request.headers['x-apex-internal'] !== 'schedule') {
-      return reply.code(404).send({ error: 'not_found' });
-    }
-    const expired = await beast.expireOverdueRuns();
-    return reply.send({ expired: expired.length, runIds: expired });
-  });
-
   // ---- identity -----------------------------------------------------------
   app.get('/api/me', async (request) => ({
     principal: request.principal,

@@ -19,16 +19,8 @@ const schema = z.object({
   DB_SECRET_ARN: z.string().optional(),
   DB_NAME: z.string().default('apex'),
 
-  EVENT_BUS_NAME: z.string().min(1),
-  QUEUE_URL_ARIA: z.string().url(),
-  QUEUE_URL_ATLAS: z.string().url(),
-  QUEUE_URL_SENTINEL: z.string().url(),
-  QUEUE_URL_ARCHIVIST: z.string().url(),
-  QUEUE_URL_WARDEN: z.string().url(),
-
   EVIDENCE_BUCKET: z.string().min(1),
-  MEMORY_TABLE: z.string().min(1),
-  KMS_KEY_ID: z.string().min(1),
+  GCP_KMS_KEY_NAME: z.string().min(1),
 
   COGNITO_USER_POOL_ID: z.string().min(1),
   COGNITO_CLIENT_ID: z.string().min(1),
@@ -64,17 +56,4 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   cached = Object.freeze(value);
   return cached;
-}
-
-export function queueUrlFor(config: Config, agentId: string): string {
-  const map: Record<string, string> = {
-    aria: config.QUEUE_URL_ARIA,
-    atlas: config.QUEUE_URL_ATLAS,
-    sentinel: config.QUEUE_URL_SENTINEL,
-    archivist: config.QUEUE_URL_ARCHIVIST,
-    warden: config.QUEUE_URL_WARDEN,
-  };
-  const url = map[agentId];
-  if (!url) throw new Error(`no queue configured for agent "${agentId}"`);
-  return url;
 }

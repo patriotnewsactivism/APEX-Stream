@@ -1,21 +1,16 @@
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import {
-  DynamoDBDocumentClient,
-  GetCommand,
-  PutCommand,
-  QueryCommand,
-  DeleteCommand,
-} from '@aws-sdk/lib-dynamodb';
 import type { AgentId } from '@apex/core';
+import type { SqlExecutor } from './sql.js';
 
 /**
- * Per-agent memory.
+ * Per-agent memory, backed by Postgres (replaces DynamoDB).
  *
- * Isolation is enforced twice, on purpose. In code, every key is prefixed with
- * the agent's namespace and the namespace is fixed at construction. In IAM,
- * each agent's task role carries a `dynamodb:LeadingKeys` condition limiting it
- * to its own partition. Application bugs therefore cannot leak one agent's
- * memory into another, and neither can a compromised container.
+ * Isolation: every key is scoped by `agent_id`, fixed at construction and
+ * never accepted from a caller — the same code-level guarantee DynamoDB's
+ * key-namespacing provided. DynamoDB additionally scoped each agent's IAM
+ * task role to its own partition; that layer has no direct equivalent while
+ * every agent shares one `DATABASE_URL` role (see the migration file's
+ * comment for the row-level-security path if per-agent credentials are
+ * introduced later).
  *
  * Two tiers:
  *   working  — short-lived scratch state, TTL in hours, survives task retries
@@ -39,80 +34,61 @@ const DEFAULT_TTL_SECONDS: Record<MemoryTier, number> = {
 };
 
 export class AgentMemory {
-  private readonly doc: DynamoDBDocumentClient;
-
   constructor(
     private readonly agentId: AgentId,
-    private readonly tableName: string,
-    client?: DynamoDBClient,
-  ) {
-    this.doc = DynamoDBDocumentClient.from(client ?? new DynamoDBClient({}), {
-      marshallOptions: { removeUndefinedValues: true },
-    });
-  }
-
-  /** Partition key. Never accepts an agent id from a caller. */
-  private get namespace(): string {
-    return `mem:${this.agentId}`;
-  }
-
-  private sortKey(tier: MemoryTier, key: string): string {
-    return `${tier}#${key}`;
-  }
+    private readonly db: SqlExecutor,
+  ) {}
 
   async get<T>(tier: MemoryTier, key: string): Promise<T | null> {
-    const res = await this.doc.send(
-      new GetCommand({
-        TableName: this.tableName,
-        Key: { namespace: this.namespace, sk: this.sortKey(tier, key) },
-      }),
+    const [row] = await this.db.query<{ value: T }>(
+      `SELECT value FROM agent_memory
+       WHERE agent_id = $1 AND tier = $2 AND key = $3 AND (expires_at IS NULL OR expires_at > now())`,
+      [this.agentId, tier, key],
     );
-    if (!res.Item) return null;
-    if (res.Item.expiresAt && res.Item.expiresAt * 1000 < Date.now()) return null;
-    return res.Item.value as T;
+    return row ? row.value : null;
   }
 
   async put<T>(tier: MemoryTier, key: string, value: T, ttlSeconds?: number): Promise<void> {
-    const now = new Date().toISOString();
     const ttl = ttlSeconds ?? DEFAULT_TTL_SECONDS[tier];
-    await this.doc.send(
-      new PutCommand({
-        TableName: this.tableName,
-        Item: {
-          namespace: this.namespace,
-          sk: this.sortKey(tier, key),
-          tier,
-          key,
-          value,
-          createdAt: now,
-          updatedAt: now,
-          expiresAt: ttl > 0 ? Math.floor(Date.now() / 1000) + ttl : null,
-        },
-      }),
+    await this.db.query(
+      `INSERT INTO agent_memory (agent_id, tier, key, value, expires_at)
+       VALUES ($1, $2, $3, $4, CASE WHEN $5::integer > 0 THEN now() + make_interval(secs => $5) ELSE NULL END)
+       ON CONFLICT (agent_id, tier, key)
+       DO UPDATE SET value = EXCLUDED.value, updated_at = now(), expires_at = EXCLUDED.expires_at`,
+      [this.agentId, tier, key, JSON.stringify(value), ttl],
     );
   }
 
   async delete(tier: MemoryTier, key: string): Promise<void> {
-    await this.doc.send(
-      new DeleteCommand({
-        TableName: this.tableName,
-        Key: { namespace: this.namespace, sk: this.sortKey(tier, key) },
-      }),
-    );
+    await this.db.query(`DELETE FROM agent_memory WHERE agent_id = $1 AND tier = $2 AND key = $3`, [
+      this.agentId,
+      tier,
+      key,
+    ]);
   }
 
   /** Lists keys in a tier under an optional prefix. Paginated by the caller. */
   async list<T>(tier: MemoryTier, prefix = '', limit = 100): Promise<MemoryRecord<T>[]> {
-    const res = await this.doc.send(
-      new QueryCommand({
-        TableName: this.tableName,
-        KeyConditionExpression: '#ns = :ns AND begins_with(sk, :prefix)',
-        ExpressionAttributeNames: { '#ns': 'namespace' },
-        ExpressionAttributeValues: { ':ns': this.namespace, ':prefix': `${tier}#${prefix}` },
-        Limit: limit,
-      }),
+    const rows = await this.db.query<{
+      key: string;
+      value: T;
+      created_at: string;
+      updated_at: string;
+      expires_at: string | null;
+    }>(
+      `SELECT key, value, created_at, updated_at, expires_at FROM agent_memory
+       WHERE agent_id = $1 AND tier = $2 AND key LIKE $3 AND (expires_at IS NULL OR expires_at > now())
+       ORDER BY key LIMIT $4`,
+      [this.agentId, tier, `${escapeLike(prefix)}%`, limit],
     );
-    return (res.Items ?? []) as MemoryRecord<T>[];
+    return rows.map((r) => ({
+      key: r.key,
+      tier,
+      value: r.value,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+      expiresAt: r.expires_at ? Math.floor(new Date(r.expires_at).getTime() / 1000) : null,
+    }));
   }
 
   /**
@@ -157,4 +133,9 @@ export function zScore(sample: number, baseline: Baseline | null): number {
   if (!baseline || baseline.count < 2) return 0;
   const sd = Math.sqrt(Math.max(baseline.variance, 1e-9));
   return (sample - baseline.mean) / sd;
+}
+
+/** Escapes `%` and `_` so a literal key prefix cannot be read as a LIKE pattern. */
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
 }

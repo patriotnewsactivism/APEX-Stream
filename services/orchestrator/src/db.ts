@@ -1,11 +1,7 @@
 import { GENESIS_HASH, sealEntry, type AuditEntry, type AuditEntryInput } from '@apex/core';
 import type { SqlExecutor } from '@apex/agent-runtime';
 
-/**
- * Thin convenience layer over whichever SqlExecutor this deployment uses —
- * a Postgres pool in containers, the RDS Data API under Lambda. Every query in
- * this service is written once and runs unchanged on both.
- */
+/** Thin convenience layer over the injected `SqlExecutor` (a Postgres pool). */
 export class Database {
   constructor(private readonly executor: SqlExecutor) {}
 
